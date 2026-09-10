@@ -227,14 +227,14 @@ func (s *Session) run(ctx context.Context, req Request) error {
 }
 
 func (s *Session) collect(ctx context.Context, id string) error {
-	s.phase("running", "Generating images; outputs will be saved locally")
+	s.phase("running", "Generating your creation; outputs will be saved locally")
 	for {
 		entry, done, err := s.conn.Client.History(ctx, id)
 		if err != nil {
 			return err
 		}
 		if done {
-			s.phase("saving", "Saving completed images to this computer")
+			s.phase("saving", "Saving completed outputs to this computer")
 			paths, err := s.conn.Client.SaveOutputs(ctx, id, entry, s.outputDir)
 			if err != nil {
 				return err
@@ -245,7 +245,7 @@ func (s *Session) collect(ctx context.Context, id string) error {
 				s.status.Outputs = append(s.status.Outputs, filepath.ToSlash(rel))
 			}
 			s.mu.Unlock()
-			s.phase("ready", "Images saved. Your GPU stays warm until you quit.")
+			s.phase("ready", "Outputs saved. Your GPU stays warm until you quit.")
 			return nil
 		}
 		select {
@@ -344,6 +344,6 @@ func (s *Session) Close(ctx context.Context) error {
 	s.mu.Lock()
 	s.conn = nil
 	s.mu.Unlock()
-	s.phase("closed", "GPU destroyed and confirmed absent. Your images are saved locally.")
+	s.phase("closed", "GPU destroyed and confirmed absent. Your outputs are saved locally.")
 	return nil
 }

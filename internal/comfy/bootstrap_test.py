@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sovrenix Inc.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Offline regression for the remote download manager's slow status responses."""
 import importlib.util
 import io

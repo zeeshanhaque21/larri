@@ -63,5 +63,14 @@ Local tests cover repeated execution on one simulated instance, image retrieval 
 The actual browser UI was exercised twice with a valid one-second VP9/WebM fixture, including playback, reuse of one simulated instance, gallery updates, and exactly one verified simulated teardown.
 The pinned ComfyUI source was inspected to match the MP4 encoder's nested API inputs and video output metadata.
 Race tests cover quitting immediately after a run is accepted and retaining artifacts across failed startup.
-These tests do not prove GPU compatibility or model generation quality.
-Live image and video generation, dependency bootstrap, and paid provider teardown must be verified before this feature is considered complete.
+Live Vast.ai validation completed on 2026-09-10.
+Two Stable Diffusion 1.5 images at 512 by 512 were generated on RTX 3060 instance `50472807`, at approximately $0.041/hour.
+Two Wan videos were generated on RTX 5060 Ti instance `50474316`, at approximately $0.068/hour.
+Each video decoded to 17 distinct H.264 frames at 512 by 320 and 16 FPS, and browser playback was verified.
+Both workflows reused the same instance for their second seed without repeating setup or model downloads.
+All four outputs were validated locally before Quit, and provider absence was confirmed for both successful instances and all failed setup attempts.
+These are observed sample results, not guarantees that arbitrary workflows or longer videos fit the same hardware.
+
+The live runs exposed and fixed a PyTorch version mismatch and a download-status timeout during large-model setup.
+Run the download-monitor regressions with `python3 internal/comfy/bootstrap_test.py` in addition to `go test ./...`.
+The full Go suite, `go vet ./...`, and race tests for ComfyUI, the daemon, and CLI passed.

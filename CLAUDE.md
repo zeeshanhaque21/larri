@@ -50,6 +50,8 @@ client reconfiguration. Metrics are **persisted** alongside the termination reco
 The ComfyUI application is an explicit extension to the inference-only contract below.
 Its native API, session lifetime, image/video workflow planning, remote downloads, and validation status are documented in [docs/COMFYUI.md](docs/COMFYUI.md).
 Keep this work local: the operator has prohibited upstream issues, branches, and pushes for the Studio implementation.
+When updating ComfyUI, verify the pinned release's minimum PyTorch version and test both a real image and a short video before calling the runtime compatible.
+Large-model aria2 status reads can exceed ten seconds during verification; retry only idempotent status reads, and retain the end of startup logs so the final exception survives verbose dependency output.
 
 **L.A.R.R.I. = Local Agent for Remote Rigging of Inference.**
 
