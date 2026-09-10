@@ -21,7 +21,7 @@ func DefaultVideoRequest() Request {
 		"8":  {ClassType: "KSampler", Inputs: map[string]any{"seed": 42, "steps": 20, "cfg": 6, "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1, "model": []any{"7", 0}, "positive": []any{"4", 0}, "negative": []any{"5", 0}, "latent_image": []any{"6", 0}}},
 		"9":  {ClassType: "VAEDecode", Inputs: map[string]any{"samples": []any{"8", 0}, "vae": []any{"3", 0}}},
 		"10": {ClassType: "CreateVideo", Inputs: map[string]any{"images": []any{"9", 0}, "fps": 16}},
-		"11": {ClassType: "SaveVideo", Inputs: map[string]any{"video": []any{"10", 0}, "filename_prefix": "larri-video", "format": "auto", "codec": "auto"}},
+		"11": {ClassType: "SaveVideo", Inputs: map[string]any{"video": []any{"10", 0}, "filename_prefix": "larri-video", "format": "mp4", "format.codec": "h264", "format.codec.encoding": "auto"}},
 	}}
 }
 

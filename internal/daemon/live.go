@@ -917,6 +917,11 @@ func (o *Orchestrator) waitReady(ctx context.Context, sess runtime.Session,
 				time.Since(deadline.Add(-o.readyCap())).Round(time.Second))
 			return nil
 		}
+		if failure, ok := o.Runtime.(interface{ StartupError() error }); ok {
+			if err := failure.StartupError(); err != nil {
+				return errs.Newf(errs.ClassModelFailure, "daemon.waitReady", "workflow failed: %v", err)
+			}
+		}
 
 		size, tail := o.readLogState(ctx, sess)
 		cur := readCounters(ctx, sess)

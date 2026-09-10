@@ -50,6 +50,9 @@ Each output currently has a 2 GiB limit.
 ## Validation status
 
 Local tests cover repeated execution on one simulated instance, image retrieval and PNG decoding, video retrieval with a valid WebM fixture, interrupted downloads, refusal to destroy before retrieval, workflow sizing, and browser authentication.
+The actual browser UI was exercised twice with a valid one-second VP9/WebM fixture, including playback, reuse of one simulated instance, gallery updates, and exactly one verified simulated teardown.
+The pinned ComfyUI source was inspected to match the MP4 encoder's nested API inputs and video output metadata.
+Race tests cover quitting immediately after a run is accepted and retaining artifacts across failed startup.
 These tests do not prove GPU compatibility or model generation quality.
 Live image and video generation, dependency bootstrap, and paid provider teardown must be verified before this feature is considered complete.
 The current execution environment does not expose the required Vast.ai credential.

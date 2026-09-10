@@ -9,9 +9,11 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,15 +31,24 @@ var bootstrapScript string
 
 // Engine implements the existing rental lifecycle for ComfyUI's native API.
 type Engine struct {
-	Plan     Plan
-	mu       sync.Mutex
-	promptID string
-	verified bool
+	Plan      Plan
+	OutputDir string
+	mu        sync.Mutex
+	promptID  string
+	verified  bool
+	failed    error
+	client    *Client
+	submitted bool
+	retrieved bool
 }
 
 func (e *Engine) Kind() core.RuntimeKind { return core.RuntimeKind("comfyui") }
 func (e *Engine) Requires() runtime.Requirements {
-	return runtime.Requirements{MinComputeCapability: 700, MinCUDA: 124, Why: "pinned PyTorch CUDA 12.4 image"}
+	capability := 700
+	if isWanProfile(e.Plan.Models) {
+		capability = 800
+	}
+	return runtime.Requirements{MinComputeCapability: capability, MinCUDA: 124, Why: "pinned PyTorch CUDA 12.4 image and workflow precision"}
 }
 func (e *Engine) Image(core.ModelSpec, core.SizingPlan) string { return defaultImage }
 func (e *Engine) LogPath() string                              { return runtimeLog }
@@ -67,16 +78,28 @@ func (e *Engine) Bootstrap(ctx context.Context, s runtime.Session, _ core.ModelS
 func (e *Engine) Launch(ctx context.Context, s runtime.Session, spec core.ModelSpec, _ core.SizingPlan) (runtime.Endpoint, error) {
 	// The instance is fresh. The process is detached, and logs grow throughout
 	// package installation and downloads so the daemon can distinguish progress.
-	cmd := "nohup python -u " + runtimeRoot + "/bootstrap.py >" + runtimeLog + " 2>&1 < /dev/null & echo started"
+	cmd := "nohup python -u " + runtimeRoot + "/bootstrap.py >" + runtimeLog + " 2>&1 < /dev/null & echo $! > " + runtimeRoot + "/pid"
 	if _, err := s.Run(ctx, cmd); err != nil {
 		return runtime.Endpoint{}, err
 	}
 	return runtime.Endpoint{Host: runtime.Loopback, Port: RemotePort, Model: spec.ServedName}, nil
 }
 
-func (e *Engine) Ready(ctx context.Context, ep runtime.Endpoint, _ core.ModelSpec) error {
+func (e *Engine) Alive(ctx context.Context, s runtime.Session) (bool, error) {
+	out, err := s.Run(ctx, "if test -s "+runtimeRoot+"/pid && kill -0 \"$(cat "+runtimeRoot+"/pid)\" 2>/dev/null; then echo alive; else echo exited; fi")
+	return strings.TrimSpace(string(out)) == "alive", err
+}
+
+func (e *Engine) Ready(ctx context.Context, ep runtime.Endpoint, _ core.ModelSpec) (readyErr error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	defer func() {
+		var request *requestError
+		var execution *executionError
+		if (errors.As(readyErr, &request) && request.Status == 400) || errors.As(readyErr, &execution) {
+			e.failed = readyErr
+		}
+	}()
 	c := &Client{BaseURL: fmt.Sprintf("http://%s:%d", ep.Host, ep.Port), Token: ep.Key, HTTP: &http.Client{Timeout: 15 * time.Second}}
 	resp, err := c.request(ctx, "GET", "/system_stats", nil)
 	if err != nil {
@@ -87,6 +110,8 @@ func (e *Engine) Ready(ctx context.Context, ep runtime.Endpoint, _ core.ModelSpe
 		return nil
 	}
 	if e.promptID == "" {
+		e.client = c
+		e.submitted = true
 		id, err := c.Queue(ctx, e.Plan.Workflow)
 		if err != nil {
 			return err
@@ -108,6 +133,46 @@ func (e *Engine) Ready(ctx context.Context, ep runtime.Endpoint, _ core.ModelSpe
 	}
 	return fmt.Errorf("comfy: first workflow returned no media")
 }
+
+func (e *Engine) markRetrieved() { e.mu.Lock(); e.retrieved = true; e.mu.Unlock() }
+
+func (e *Engine) BeforeTeardown(ctx context.Context) error {
+	e.mu.Lock()
+	client, needed := e.client, e.submitted && !e.retrieved
+	e.mu.Unlock()
+	if !needed {
+		return nil
+	}
+	if e.OutputDir == "" {
+		return fmt.Errorf("comfy: output directory is missing; instance retained")
+	}
+	copyClient := *client
+	copyClient.HTTP = &http.Client{Timeout: 2 * time.Minute}
+	client = &copyClient
+	if err := client.WaitIdle(ctx); err != nil {
+		return err
+	}
+	resp, err := client.request(ctx, "GET", "/history", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var history map[string]HistoryEntry
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&history); err != nil {
+		return err
+	}
+	for id, entry := range history {
+		if entry.HasMedia() {
+			if _, err := client.SaveOutputs(ctx, id, entry, e.OutputDir); err != nil {
+				return err
+			}
+		}
+	}
+	e.markRetrieved()
+	return nil
+}
+
+func (e *Engine) StartupError() error { e.mu.Lock(); defer e.mu.Unlock(); return e.failed }
 
 func (e *Engine) Logs(ctx context.Context, s runtime.Session, tail int) (io.ReadCloser, error) {
 	out, err := s.Run(ctx, fmt.Sprintf("tail -n %d %s", max(1, tail), runtimeLog))

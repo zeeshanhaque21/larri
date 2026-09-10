@@ -614,6 +614,11 @@ func (o *Orchestrator) UpAndServe(ctx context.Context, req UpRequest) (*Live, er
 			return nil, err
 		}
 		lastErr = err
+		// A workflow can have artifacts before readiness succeeds. Keep its
+		// tunnel available to the owning surface when retrieval needs a retry.
+		if live != nil && errs.ClassOf(err) == errs.ClassDestroyUnconfirmed {
+			return live, err
+		}
 		// Say WHY this machine failed, here, rather than only reporting the
 		// last error once every attempt is exhausted. A fallback that
 		// swallows its reasons turns three distinct failures into one
@@ -695,6 +700,14 @@ func (o *Orchestrator) attempt(ctx context.Context, req UpRequest) (*Live, *core
 	live, serr := o.Serve(ctx, rig, o.lastKeys, req.LocalPort, req.HFToken)
 	if serr != nil {
 		if live != nil {
+			if keeper, ok := o.Runtime.(interface{ BeforeTeardown(context.Context) error }); ok {
+				cleanup, stop := context.WithTimeout(context.Background(), 3*time.Minute)
+				err := keeper.BeforeTeardown(cleanup)
+				stop()
+				if err != nil {
+					return live, rig, errs.Newf(errs.ClassDestroyUnconfirmed, "daemon.attempt", "artifact retrieval incomplete: %v", err)
+				}
+			}
 			_ = live.Close()
 		}
 		return nil, rig, o.explainDeadline(ctx, serr, deadline, started)
@@ -1063,6 +1076,13 @@ func (o *Orchestrator) Down(ctx context.Context, rig *core.Rig, term *core.Termi
 		return err
 	}
 	rig.State = core.StateDraining
+	// Workflow engines may have generated artifacts even when readiness failed.
+	// Preserve them while the tunnel is still available, before destroying the host.
+	if keeper, ok := o.Runtime.(interface{ BeforeTeardown(context.Context) error }); ok {
+		if err := keeper.BeforeTeardown(ctx); err != nil {
+			return err
+		}
+	}
 
 	if o.Proxy != nil {
 		o.Proxy.SetUpstream(wire.Upstream{})

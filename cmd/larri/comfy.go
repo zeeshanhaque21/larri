@@ -49,7 +49,7 @@ func cmdComfy(ctx context.Context, args []string) error {
 	}
 	defer st.Close()
 	events := make(chan daemon.Event, 64)
-	backend := &comfy.RentalBackend{Store: st, OpenProvider: func() (provider.Provider, error) { return openProvider("vastai") }, Events: events}
+	backend := &comfy.RentalBackend{Store: st, OutputDir: out, OpenProvider: func() (provider.Provider, error) { return openProvider("vastai") }, Events: events}
 	session := comfy.NewSession(backend, out)
 	go func() {
 		for event := range events {

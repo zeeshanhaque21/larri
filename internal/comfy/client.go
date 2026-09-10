@@ -24,6 +24,20 @@ type Client struct {
 	Token   secret.Secret
 	HTTP    *http.Client
 }
+
+type requestError struct {
+	Status int
+	Route  string
+}
+
+func (e *requestError) Error() string {
+	return fmt.Sprintf("comfy: %s returned http %d", e.Route, e.Status)
+}
+
+type executionError struct{ Message string }
+
+func (e *executionError) Error() string { return "comfy: workflow execution failed: " + e.Message }
+
 type Output struct {
 	Filename  string `json:"filename"`
 	Subfolder string `json:"subfolder"`
@@ -58,6 +72,15 @@ func (n NodeOutput) Files() []Output {
 	return result
 }
 
+func (h HistoryEntry) HasMedia() bool {
+	for _, node := range h.Outputs {
+		if len(node.Files()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) request(ctx context.Context, method, route string, body any) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
@@ -87,7 +110,7 @@ func (c *Client) request(ctx context.Context, method, route string, body any) (*
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
-		return nil, fmt.Errorf("comfy: %s returned http %d", route, resp.StatusCode)
+		return nil, &requestError{Status: resp.StatusCode, Route: route}
 	}
 	return resp, nil
 }
@@ -107,7 +130,7 @@ func (c *Client) Queue(ctx context.Context, w Workflow) (string, error) {
 		return "", err
 	}
 	if result.PromptID == "" || (len(result.Error) > 0 && string(result.Error) != "null") {
-		return "", fmt.Errorf("comfy: workflow validation failed: %s", result.NodeErrors)
+		return "", &executionError{Message: string(result.NodeErrors)}
 	}
 	return result.PromptID, nil
 }
@@ -124,7 +147,8 @@ func (c *Client) History(ctx context.Context, id string) (HistoryEntry, bool, er
 	}
 	entry, ok := history[id]
 	if ok && entry.Status.Status == "error" {
-		return entry, false, fmt.Errorf("comfy: workflow execution failed: %s", entry.Status.Messages)
+		messages, _ := json.Marshal(entry.Status.Messages)
+		return entry, false, &executionError{Message: string(messages)}
 	}
 	return entry, ok && entry.Status.Completed, nil
 }
@@ -143,6 +167,9 @@ func (c *Client) WaitIdle(ctx context.Context) error {
 		resp.Body.Close()
 		if err != nil {
 			return err
+		}
+		if q.Running == nil || q.Pending == nil {
+			return fmt.Errorf("comfy: queue response is missing running or pending state")
 		}
 		if len(q.Running) == 0 && len(q.Pending) == 0 {
 			return nil

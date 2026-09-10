@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ type Session struct {
 	conn      *Connection
 	closing   bool
 	busy      bool
+	active    sync.WaitGroup
 	poll      time.Duration
 }
 
@@ -98,9 +100,10 @@ func (s *Session) begin() error {
 		return fmt.Errorf("comfy: another operation is in progress")
 	}
 	s.busy = true
+	s.active.Add(1)
 	return nil
 }
-func (s *Session) end() { s.mu.Lock(); s.busy = false; s.mu.Unlock() }
+func (s *Session) end() { s.mu.Lock(); s.busy = false; s.mu.Unlock(); s.active.Done() }
 
 func (s *Session) Preview(ctx context.Context, req Request) (Plan, core.Offer, error) {
 	if err := s.begin(); err != nil {
@@ -178,15 +181,20 @@ func (s *Session) run(ctx context.Context, req Request) error {
 		s.mu.Unlock()
 		s.phase("starting", "Preparing your GPU and downloading models directly to it")
 		conn, err := s.backend.Start(ctx, p)
+		if conn != nil {
+			s.mu.Lock()
+			s.conn = conn
+			s.status.Offer = &conn.Offer
+			s.status.Started = conn.Started
+			s.status.InstanceID = conn.InstanceID
+			s.mu.Unlock()
+		}
 		if err != nil {
 			return err
 		}
-		s.mu.Lock()
-		s.conn = conn
-		s.status.Offer = &conn.Offer
-		s.status.Started = conn.Started
-		s.status.InstanceID = conn.InstanceID
-		s.mu.Unlock()
+		if conn == nil {
+			return fmt.Errorf("comfy: backend returned no connection")
+		}
 		if conn.InitialPrompt != "" {
 			return s.collect(ctx, conn.InitialPrompt)
 		}
@@ -248,15 +256,53 @@ func (s *Session) collect(ctx context.Context, id string) error {
 	}
 }
 
+// ValidateCurrent also applies hardware and model checks to the native editor.
+func (s *Session) ValidateCurrent(workflow Workflow) error {
+	s.mu.Lock()
+	active := s.status.Plan
+	s.mu.Unlock()
+	if active == nil {
+		return fmt.Errorf("comfy: no active workflow plan")
+	}
+	p, err := PlanWorkflow(Request{Workflow: workflow, Models: active.Models, MinVRAMGB: active.VRAMGB, SessionHours: active.SessionHours})
+	if err != nil {
+		return err
+	}
+	if p.VRAMGB > active.VRAMGB {
+		return fmt.Errorf("comfy: workflow exceeds this session's vram plan")
+	}
+	for _, model := range p.Models {
+		found := false
+		for _, installed := range active.Models {
+			if model.Name == installed.Name && model.Folder == installed.Folder && model.Repo == installed.Repo && model.File == installed.File {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("comfy: model %s is not installed in this session", model.Name)
+		}
+	}
+	return nil
+}
+
 // Close waits for the current run and its local output writes, then verifies
 // teardown through the backend. Failed cleanup is retryable and stays visible.
 func (s *Session) Close(ctx context.Context) error {
 	s.mu.Lock()
 	s.closing = true
 	s.mu.Unlock()
+	// Submit may have accepted work whose goroutine has not acquired op yet.
+	// Wait for accepted operations before observing whether a rig exists.
+	s.active.Wait()
 	s.op.Lock()
 	defer s.op.Unlock()
 	if s.conn == nil {
+		if pending, ok := s.backend.(interface{ CheckClosed(context.Context) error }); ok {
+			if err := pending.CheckClosed(ctx); err != nil {
+				s.phase("error", err.Error())
+				return err
+			}
+		}
 		s.phase("closed", "Application closed. No GPU is rented.")
 		return nil
 	}
@@ -274,13 +320,13 @@ func (s *Session) Close(ctx context.Context) error {
 		return err
 	}
 	var history map[string]HistoryEntry
-	err = json.NewDecoder(resp.Body).Decode(&history)
+	err = json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&history)
 	resp.Body.Close()
 	if err != nil {
 		return err
 	}
 	for id, entry := range history {
-		if entry.Status.Completed && entry.Status.Status != "error" && len(entry.Outputs) > 0 {
+		if entry.HasMedia() {
 			if _, err := s.conn.Client.SaveOutputs(ctx, id, entry, s.outputDir); err != nil {
 				s.phase("error", "Output retrieval failed; GPU retained: "+err.Error())
 				return err

@@ -56,6 +56,10 @@ func testComfyServer(t *testing.T) (*httptest.Server, []byte) {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
+	videoBytes, err := os.ReadFile("testdata/sample.webm")
+	if err != nil {
+		t.Fatal(err)
+	}
 	history := map[string]HistoryEntry{}
 	next := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,12 +67,24 @@ func testComfyServer(t *testing.T) (*httptest.Server, []byte) {
 		defer mu.Unlock()
 		switch {
 		case r.URL.Path == "/prompt" && r.Method == "POST":
+			var submitted struct {
+				Prompt Workflow `json:"prompt"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				http.Error(w, "bad prompt", 400)
+				return
+			}
 			next++
 			id := fmt.Sprint(next)
 			var entry HistoryEntry
 			entry.Status.Completed = true
 			entry.Status.Status = "success"
 			entry.Outputs = map[string]NodeOutput{"7": {Images: []Output{{Filename: "image.png", Type: "output"}}}}
+			for _, node := range submitted.Prompt {
+				if node.ClassType == "SaveVideo" {
+					entry.Outputs = map[string]NodeOutput{"11": {Videos: []Output{{Filename: "clip.webm", Type: "output"}}}}
+				}
+			}
 			history[id] = entry
 			writeJSON(w, map[string]any{"prompt_id": id})
 		case r.URL.Path == "/history":
@@ -81,6 +97,11 @@ func testComfyServer(t *testing.T) (*httptest.Server, []byte) {
 			}
 			writeJSON(w, result)
 		case r.URL.Path == "/view":
+			if r.URL.Query().Get("filename") == "clip.webm" {
+				w.Header().Set("Content-Type", "video/webm")
+				_, _ = w.Write(videoBytes)
+				return
+			}
 			w.Header().Set("Content-Type", "image/png")
 			_, _ = w.Write(data.Bytes())
 		case r.URL.Path == "/queue":
@@ -91,6 +112,34 @@ func testComfyServer(t *testing.T) (*httptest.Server, []byte) {
 	}))
 	t.Cleanup(server.Close)
 	return server, data.Bytes()
+}
+
+// TestBrowserHarness exercises the actual UI without paid provider calls.
+// Manually enabled only; fixture output is intentionally not model generation.
+func TestBrowserHarness(t *testing.T) {
+	if os.Getenv("LARRI_COMFY_BROWSER_TEST") != "1" {
+		t.Skip("manual browser fixture harness")
+	}
+	server, _ := testComfyServer(t)
+	backend := &testBackend{client: &Client{BaseURL: server.URL}}
+	s := NewSession(backend, t.TempDir())
+	s.resolve = func(_ context.Context, p Plan) (Plan, error) { return p, nil }
+	w, err := NewWeb(s, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("BROWSER_URL=" + w.URL())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := w.Serve(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if backend.starts != 1 || backend.destroys != 1 {
+		t.Fatalf("starts=%d destroys=%d", backend.starts, backend.destroys)
+	}
+	if len(s.Snapshot().Outputs) < 2 {
+		t.Fatal("browser must execute twice before quitting")
+	}
 }
 
 func TestSessionRunsTwiceSavesImagesAndDestroysOnce(t *testing.T) {
@@ -152,6 +201,32 @@ func TestFailedOutputRetrievalRetainsInstance(t *testing.T) {
 	}
 	if b.destroys != 0 {
 		t.Fatal("destroyed before retrieving remote outputs")
+	}
+}
+
+func TestQuitWaitsForAnAcceptedRun(t *testing.T) {
+	server, _ := testComfyServer(t)
+	b := &testBackend{client: &Client{BaseURL: server.URL}}
+	s := NewSession(b, t.TempDir())
+	entered, release := make(chan struct{}), make(chan struct{})
+	s.resolve = func(_ context.Context, p Plan) (Plan, error) { close(entered); <-release; return p, nil }
+	if err := s.Submit(DefaultRequest()); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	done := make(chan error, 1)
+	go func() { done <- s.Close(context.Background()) }()
+	select {
+	case <-done:
+		t.Fatal("quit overtook the accepted run")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if b.starts != 1 || b.destroys != 1 || len(s.Snapshot().Outputs) != 1 {
+		t.Fatal("accepted work was not saved before teardown")
 	}
 }
 

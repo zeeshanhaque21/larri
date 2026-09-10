@@ -4,11 +4,13 @@
 package comfy
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -165,6 +167,25 @@ func (w *Web) nativeHandler() http.Handler {
 		if conn == nil || closing {
 			http.Error(rw, "ComfyUI is unavailable while the session is starting or closing", 503)
 			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/prompt" {
+			body, err := io.ReadAll(http.MaxBytesReader(rw, r.Body, 4<<20))
+			if err != nil {
+				http.Error(rw, "workflow exceeds 4 mib", 413)
+				return
+			}
+			var submission struct {
+				Prompt Workflow `json:"prompt"`
+			}
+			if err := json.Unmarshal(body, &submission); err != nil {
+				http.Error(rw, "invalid workflow", 400)
+				return
+			}
+			if err := s.ValidateCurrent(submission.Prompt); err != nil {
+				http.Error(rw, err.Error(), 400)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		target, err := url.Parse(conn.Client.BaseURL)
 		if err != nil {
