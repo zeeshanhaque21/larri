@@ -24,7 +24,7 @@ import (
 const RemotePort = 8188
 const runtimeLog = "/var/log/larri/comfyui.log"
 const runtimeRoot = "/opt/larri-comfy"
-const defaultImage = "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime"
+const defaultImage = "pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime"
 
 //go:embed bootstrap.py
 var bootstrapScript string
@@ -44,11 +44,11 @@ type Engine struct {
 
 func (e *Engine) Kind() core.RuntimeKind { return core.RuntimeKind("comfyui") }
 func (e *Engine) Requires() runtime.Requirements {
-	capability := 700
+	capability := 750
 	if isWanProfile(e.Plan.Models) {
 		capability = 800
 	}
-	return runtime.Requirements{MinComputeCapability: capability, MinCUDA: 124, Why: "pinned PyTorch CUDA 12.4 image and workflow precision"}
+	return runtime.Requirements{MinComputeCapability: capability, MinCUDA: 128, Why: "pinned PyTorch CUDA 12.8 image and workflow precision"}
 }
 func (e *Engine) Image(core.ModelSpec, core.SizingPlan) string { return defaultImage }
 func (e *Engine) LogPath() string                              { return runtimeLog }

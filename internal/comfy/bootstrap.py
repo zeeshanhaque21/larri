@@ -90,7 +90,7 @@ def main():
     app.mkdir(exist_ok=True)
     run("tar", "xzf", str(source), "--strip-components=1", "-C", str(app))
     constraints = ROOT / "constraints.txt"
-    constraints.write_text("torch==2.6.0\ntorchvision==0.21.0\ntorchaudio==2.6.0\n")
+    constraints.write_text("torch==2.8.0\ntorchvision==0.23.0\ntorchaudio==2.8.0\n")
     run("python", "-m", "pip", "install", "-r", str(app / "requirements.txt"), "-c", str(constraints))
     for model in json.loads((ROOT / "models.json").read_text()):
         url = "https://huggingface.co/{}/resolve/{}/{}?download=true".format(

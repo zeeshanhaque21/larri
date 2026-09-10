@@ -10,6 +10,16 @@ Open the launch URL printed in the terminal.
 The default ports are 8180 for Studio and 8181 for the native ComfyUI editor.
 Use `--port`, `--editor-port`, and `--outputs` to change these locations.
 Set `VASTAI_API_KEY` in the launching process environment before renting a GPU.
+For a local `.env` containing `VASTAI_API_KEY`, launch with:
+
+```sh
+set -a
+source .env
+set +a
+go run ./cmd/larri comfy
+```
+
+The `.env` file is ignored by Git.
 Credentials never enter the browser or rented instance.
 
 Choose Image for Stable Diffusion 1.5 or Video for Wan 2.1 1.3B text-to-video.
@@ -23,7 +33,7 @@ Models are downloaded directly from Hugging Face on the rented host using aria2 
 LARRI resolves the model repository commit, size, and SHA-256 before rental.
 The host verifies model files before loading them and retains them for the session.
 No model weights are uploaded from this computer.
-ComfyUI is pinned to commit `40c4fcdf513a4523e39d54a9d391908af8df8171` and runs in the PyTorch 2.6.0 CUDA 12.4 image.
+ComfyUI is pinned to commit `40c4fcdf513a4523e39d54a9d391908af8df8171` and runs in the PyTorch 2.8.0 CUDA 12.8 image.
 
 Run again to reuse the same instance and downloaded models.
 Import accepts ComfyUI API-format JSON or a request containing `workflow`, `models`, `min_vram_gb`, and `session_hours`.
@@ -55,4 +65,3 @@ The pinned ComfyUI source was inspected to match the MP4 encoder's nested API in
 Race tests cover quitting immediately after a run is accepted and retaining artifacts across failed startup.
 These tests do not prove GPU compatibility or model generation quality.
 Live image and video generation, dependency bootstrap, and paid provider teardown must be verified before this feature is considered complete.
-The current execution environment does not expose the required Vast.ai credential.
