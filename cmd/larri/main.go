@@ -43,6 +43,7 @@ const usage = `larri — Local Agent for Remote Rigging of Inference
   larri label-key generate a key that seals provider-side labels
   larri config  edit saved criteria, previewing what they would rent
   larri tui     bring a rig up under a live dashboard
+  larri comfy   create images and videos in a session-owned ComfyUI studio
   larri mcp     expose the lifecycle as MCP tools for Claude Code and other agents
   larri status  what is running, what it costs, and why past rigs ended
   larri version build metadata
@@ -121,6 +122,8 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "comfy":
+		err = cmdComfy(ctx, os.Args[2:])
 	case "up":
 		err = cmdUp(ctx, os.Args[2:])
 	case "down":

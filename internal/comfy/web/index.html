@@ -1,0 +1,25 @@
+<!-- Copyright (C) 2026 Sovrenix Inc. -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LARRI Studio</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/">LARRI <span>STUDIO</span></a><div class="session"><span id="light"></span><span id="state">No GPU rented</span></div><button id="quit" class="quiet">Quit &amp; release GPU</button></header>
+<main>
+<section class="intro"><p class="eyebrow">YOUR IDEAS. ON DEMAND COMPUTE.</p><h1>Make something<br>worth keeping.</h1><p>Create with ComfyUI. We find an affordable GPU,<br class="desktop"> prepare your models, and keep it warm while you work.</p></section>
+<div class="workspace">
+<section class="controls panel"><div class="panel-heading"><h2>Your workflow</h2><span class="tag">COMFYUI</span></div>
+<div class="tabs" role="group" aria-label="Workflow type"><button id="image-tab" class="selected">Image</button><button id="video-tab">Video</button><button id="import-tab">Import workflow</button></div>
+<div id="simple"><label for="prompt">Describe your scene</label><textarea id="prompt" rows="5">a small red cabin beside a mountain lake, morning light, detailed photograph</textarea>
+<div class="fields"><div><label for="width">Width</label><input id="width" type="number" min="64" max="1920" step="16" value="512"></div><div><label for="height">Height</label><input id="height" type="number" min="64" max="1920" step="16" value="512"></div><div><label for="seed">Seed</label><input id="seed" type="number" min="0" value="42"></div></div>
+<div id="video-settings" class="fields" hidden><div><label for="frames">Frames</label><input id="frames" type="number" min="9" max="121" step="4" value="17"></div><div><label for="fps">Frames / second</label><input id="fps" type="number" min="1" max="60" value="16"></div></div></div>
+<div id="advanced" hidden><label for="workflow-file">Load an API-format workflow JSON</label><input id="workflow-file" type="file" accept=".json,application/json"><label for="workflow">Workflow request</label><textarea id="workflow" rows="13" spellcheck="false"></textarea><p class="hint">Use ComfyUI's API export. Include remote model mappings and a VRAM floor for models without a known profile.</p></div>
+<div class="fields settings"><div><label for="hours">Expected session</label><select id="hours"><option value="1">1 hour</option><option value="2">2 hours</option><option value="4">4 hours</option><option value="8">8 hours</option></select></div><div class="model-note"><span id="model-label">Stable Diffusion 1.5</span><small>Models download to the GPU</small></div></div>
+<div id="error" role="alert" hidden></div><button id="run" class="primary">Find GPU &amp; create <span>↗</span></button><button id="preview" class="secondary">Check price first</button><p class="hint footnote">The lowest estimated session cost among compatible offers. GPU stays rented until you quit.</p>
+</section>
+<section class="results panel"><div class="panel-heading"><h2>Your creations</h2><button id="editor" class="quiet" disabled>Open ComfyUI ↗</button></div><div id="gallery"><div id="empty"><div class="empty-icon">✳</div><h3>A little space for your imagination.</h3><p>Your images and videos will appear here.<br>Every finished creation is saved on this computer.</p></div></div><div class="progress"><span id="phase">Ready when you are</span><p id="message" aria-live="polite">Choose an image, video, or your own workflow to begin.</p></div></section>
+</div>
+<section class="rig panel"><div><span class="metric-label">SESSION GPU</span><strong id="gpu">Not rented yet</strong></div><div><span class="metric-label">HOURLY RATE</span><strong id="price">$0.00 <small>/ hr</small></strong></div><div><span class="metric-label">ESTIMATED SPEND</span><strong id="cost">$0.00</strong></div><div><span class="metric-label">MODEL CACHE</span><strong id="cache">Ready after first run</strong></div></section>
+<details class="activity"><summary>Session activity</summary><pre id="events">No activity yet.</pre></details>
+<footer><span>Built on ComfyUI · Powered by Vast.ai</span><span>Local controls. Remote compute. Your creations.</span></footer>
+</main></body></html>

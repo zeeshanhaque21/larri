@@ -47,6 +47,10 @@ client reconfiguration. Metrics are **persisted** alongside the termination reco
 
 ## What LARRI is
 
+The ComfyUI application is an explicit extension to the inference-only contract below.
+Its native API, session lifetime, image/video workflow planning, remote downloads, and validation status are documented in [docs/COMFYUI.md](docs/COMFYUI.md).
+Keep this work local: the operator has prohibited upstream issues, branches, and pushes for the Studio implementation.
+
 **L.A.R.R.I. = Local Agent for Remote Rigging of Inference.**
 
 A local agent that rents someone else's GPU, stands up an inference server on it, points

@@ -329,11 +329,17 @@ type Survey struct {
 func (o *Orchestrator) survey(ctx context.Context, req UpRequest) (*Survey, error) {
 	// ---- size before spending -------------------------------------------
 	o.emit("sizing", "resolving %s", req.Model.Ref)
-	facts, err := o.Resolver.Resolve(ctx, req.Model.Ref, req.Model.Revision)
-	if err != nil {
-		return nil, err
+	var facts sizing.Facts
+	var plan core.SizingPlan
+	var err error
+	if planner, ok := o.Runtime.(runtime.SizingPlanner); ok {
+		plan, err = planner.SizingPlan(ctx, req.Model)
+	} else {
+		facts, err = o.Resolver.Resolve(ctx, req.Model.Ref, req.Model.Revision)
+		if err == nil {
+			plan, err = sizing.Plan(sizing.Request{Spec: req.Model, Facts: facts})
+		}
 	}
-	plan, err := sizing.Plan(sizing.Request{Spec: req.Model, Facts: facts})
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +427,10 @@ func (o *Orchestrator) survey(ctx context.Context, req UpRequest) (*Survey, erro
 	}
 	sel := rank.Select(offers, req.Criteria, fits, policy)
 	if sel.Selected == nil {
+		if _, ok := o.Runtime.(runtime.SizingPlanner); ok {
+			return nil, errs.Newf(errs.ClassCriteriaUnsatisfiable, "daemon.survey",
+				"no offer satisfies workflow requirements: %s usable vram", sizing.HumanBytes(plan.RequiredVRAMBytes))
+		}
 		short := sizing.Analyse(sizing.Request{Spec: req.Model, Facts: facts}, offers)
 		return nil, errs.Newf(errs.ClassCriteriaUnsatisfiable, "daemon.survey", "%s", short.String())
 	}

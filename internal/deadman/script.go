@@ -57,7 +57,7 @@ conns_busy() {
 # load both talk while the counters stay quiet.
 log_grew() {
     [ -f "$RTLOG" ] || return 0
-    cur=$(stat -c %s "$RTLOG" 2>/dev/null || echo 0)
+    cur=$(stat -c %s "$RTLOG" 2>/dev/null || stat -f %z "$RTLOG" 2>/dev/null || echo 0)
     [ -n "$PREV_LOG" ] && [ "$cur" -gt "$PREV_LOG" ] 2>/dev/null && echo "runtime log +$((cur - PREV_LOG))B"
     PREV_LOG="$cur"
 }
@@ -96,7 +96,7 @@ io_busy  >/dev/null
 while :; do
     sleep "$INTERVAL"
 
-    last=$(stat -c %Y "$BEAT" 2>/dev/null)
+    last=$(stat -c %Y "$BEAT" 2>/dev/null || stat -f %m "$BEAT" 2>/dev/null)
     # A missing heartbeat file means disarmed, not abandoned: Disarm removes
     # it deliberately before a teardown LARRI is performing itself.
     if [ -z "$last" ]; then
