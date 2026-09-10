@@ -639,3 +639,17 @@ func TestASilentSessionIsNotAStalledRuntime(t *testing.T) {
 		t.Error("a readable log means the connection is alive")
 	}
 }
+
+func TestDiagnosticTailKeepsExceptionAfterVerboseInstall(t *testing.T) {
+	var tail diagnosticTail
+	setup := strings.Repeat("Successfully installed dependency\n", 2000)
+	tail.Write([]byte(setup))
+	tail.Write([]byte("Traceback (most recent call last):\nValueError: kernel_size has unsupported type list[int]\n"))
+	if len(tail.data) != 16<<10 {
+		t.Fatalf("log tail size = %d", len(tail.data))
+	}
+	got := strings.Join(diagnosticLines(strings.Split(string(tail.data), "\n")), "\n")
+	if !strings.Contains(got, "ValueError: kernel_size") {
+		t.Fatalf("missing actual startup error: %s", got)
+	}
+}

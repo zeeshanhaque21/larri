@@ -1055,7 +1055,9 @@ func (o *Orchestrator) runtimeSaid(ctx context.Context, sess runtime.Session) st
 		return ""
 	}
 	defer rc.Close()
-	b, err := io.ReadAll(io.LimitReader(rc, 16<<10))
+	var tail diagnosticTail
+	_, err = io.Copy(&tail, rc)
+	b := tail.data
 	if err != nil || len(b) == 0 {
 		return ""
 	}
@@ -1201,6 +1203,25 @@ var errorSignatures = []string{
 // So the window is anchored on the last line that looks like a cause, with
 // the lines around it for context, and falls back to the tail only when
 // nothing in the log looks like an error at all.
+// diagnosticTail retains the end of verbose setup logs, where Python reports
+// the exception, without buffering the entire remote stream.
+type diagnosticTail struct{ data []byte }
+
+func (t *diagnosticTail) Write(p []byte) (int, error) {
+	const limit = 16 << 10
+	n := len(p)
+	if n >= limit {
+		t.data = append(t.data[:0], p[n-limit:]...)
+	} else {
+		if drop := len(t.data) + n - limit; drop > 0 {
+			copy(t.data, t.data[drop:])
+			t.data = t.data[:len(t.data)-drop]
+		}
+		t.data = append(t.data, p...)
+	}
+	return n, nil
+}
+
 func diagnosticLines(lines []string) []string {
 	anchor := -1
 	for i := len(lines) - 1; i >= 0; i-- {
