@@ -14,3 +14,6 @@ gh-pages/content.html
 .env
 .env.*
 !.env.example
+
+# Python bootstrap test cache.
+__pycache__/

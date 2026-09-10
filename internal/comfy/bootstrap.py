@@ -45,7 +45,7 @@ def main():
                            "params": ["token:" + token] + params}).encode()
         req = urllib.request.Request("http://127.0.0.1:16800/jsonrpc", data,
                                      {"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=60) as response:
             answer = json.load(response)
         if "error" in answer:
             raise RuntimeError("download manager rejected request")
@@ -72,8 +72,20 @@ def main():
             options["checksum"] = "sha-256=" + digest
             options["check-integrity"] = "true"
         gid = rpc("addUri", [[url], options])
+        misses = 0
         while True:
-            status = rpc("tellStatus", [gid])
+            try:
+                status = rpc("tellStatus", [gid])
+                misses = 0
+            except OSError:
+                misses += 1
+                if misses >= 5 or downloader.poll() is not None:
+                    raise
+                # Status reads are safe to retry. Never repeat addUri after an
+                # ambiguous response, which could create duplicate downloads.
+                print("download: waiting for manager:", target.name, flush=True)
+                time.sleep(5)
+                continue
             print("download:", target.name, status.get("completedLength", "0"),
                   "/", status.get("totalLength", "0"), "bytes", flush=True)
             if status["status"] == "complete":
