@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"go.sovrenix.com/larri/internal/core"
+	"go.sovrenix.com/larri/internal/provider"
 	"go.sovrenix.com/larri/internal/runtime"
 )
 
@@ -37,12 +38,12 @@ func plan(t *testing.T, key string) Plan {
 
 func TestNormaliseSizesHostFromModelAndCard(t *testing.T) {
 	// iq3_s needs 55 GB across RAM and VRAM. A 22 GB card leaves 33 GB for RAM,
-	// plus 16 for the system; a 32 GB card leaves 23.
-	if got := plan(t, "2080ti22").MinRAMGB; got != 49 {
-		t.Errorf("2080ti22 RAM floor = %d, want 49", got)
+	// plus 10 for the system; a 32 GB card leaves 23.
+	if got := plan(t, "2080ti22").MinRAMGB; got != 43 {
+		t.Errorf("2080ti22 RAM floor = %d, want 43", got)
 	}
-	if got := plan(t, "v100").MinRAMGB; got != 39 {
-		t.Errorf("v100 RAM floor = %d, want 39", got)
+	if got := plan(t, "v100").MinRAMGB; got != 33 {
+		t.Errorf("v100 RAM floor = %d, want 33", got)
 	}
 	if got := plan(t, "v100").DiskGB; got != 140 {
 		t.Errorf("disk = %d, want 140", got)
@@ -50,10 +51,10 @@ func TestNormaliseSizesHostFromModelAndCard(t *testing.T) {
 }
 
 func TestFlavorAndImageFollowTheCard(t *testing.T) {
-	if got := plan(t, "v100").Image(); got != "ghcr.io/niko1221/strata:0.2.9-cuda12" {
+	if got := plan(t, "v100").Image(); got != "ghcr.io/zeeshanhaque21/strata-bench:0.2.9-cuda12" {
 		t.Errorf("v100 image = %s", got)
 	}
-	if got := plan(t, "2080ti22").Image(); got != "ghcr.io/niko1221/strata:0.2.9-cuda13" {
+	if got := plan(t, "2080ti22").Image(); got != "ghcr.io/zeeshanhaque21/strata-bench:0.2.9-cuda13" {
 		t.Errorf("2080ti22 image = %s", got)
 	}
 	// A Turing card forced onto the CUDA 12 image needs the lower driver.
@@ -660,5 +661,35 @@ func TestMirrorIsExportedToTheLaunchAndLiftsTheRegionBlock(t *testing.T) {
 		if err := q.Normalise(); err == nil {
 			t.Errorf("%q accepted as a mirror", bad)
 		}
+	}
+}
+
+type fixedProvider struct {
+	provider.Provider
+	offers []core.Offer
+}
+
+func (f fixedProvider) Search(context.Context, core.Criteria) ([]core.Offer, error) {
+	return f.offers, nil
+}
+
+func TestSearchNeverOffersMultiGPUHosts(t *testing.T) {
+	// The cheapest listing is the two-card box; it must not reach the ranker.
+	p := singleGPU{fixedProvider{offers: []core.Offer{
+		{OfferID: "two", GPUCount: 2, PriceHr: 0.20},
+		{OfferID: "one", GPUCount: 1, PriceHr: 0.25},
+		{OfferID: "four", GPUCount: 4, PriceHr: 0.30},
+	}}}
+	got, err := p.Search(context.Background(), core.Criteria{})
+	if err != nil || len(got) != 1 || got[0].OfferID != "one" {
+		t.Fatalf("offers = %+v, %v", got, err)
+	}
+}
+
+func TestImageRepoCanBeOverridden(t *testing.T) {
+	p := plan(t, "v100")
+	p.ImageRepo = "ghcr.io/someone/strata-bench"
+	if got := p.Image(); got != "ghcr.io/someone/strata-bench:0.2.9-cuda12" {
+		t.Errorf("image = %s", got)
 	}
 }

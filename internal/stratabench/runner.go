@@ -6,6 +6,8 @@ package stratabench
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,11 +52,35 @@ func (r *Runner) logf(format string, args ...any) {
 	}
 }
 
+// singleGPU hides multi-GPU hosts from the ranker.
+//
+// The marketplace filter can only say "at least one GPU", and a two-card box
+// is often the cheapest listing of a card, so without this the ranker picks
+// it first and a benchmark of one card would run on two. Filtering the search
+// result means the ranker, the preview and the fallback all see the same
+// market, which a refusal at confirmation time could not guarantee.
+type singleGPU struct{ provider.Provider }
+
+func (s singleGPU) Search(ctx context.Context, c core.Criteria) ([]core.Offer, error) {
+	offers, err := s.Provider.Search(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	kept := offers[:0:0]
+	for _, o := range offers {
+		if o.GPUCount == 1 {
+			kept = append(kept, o)
+		}
+	}
+	return kept, nil
+}
+
 func (r *Runner) orchestrator(p Plan, events chan<- daemon.Event) (*daemon.Orchestrator, *Engine, error) {
-	prov, err := r.OpenProvider()
+	opened, err := r.OpenProvider()
 	if err != nil {
 		return nil, nil, err
 	}
+	prov := singleGPU{opened}
 	policy := rank.DefaultPolicy()
 	policy.SessionHours = 1
 	eng := &Engine{Plan: p}
@@ -87,6 +113,77 @@ func (r *Runner) Preview(ctx context.Context, p Plan) (*daemon.Survey, error) {
 		return nil, err
 	}
 	return o.Offers(ctx, p.request(nil, 0))
+}
+
+// Candidate is one single-GPU host for a card and the floors it misses.
+type Candidate struct {
+	Offer  core.Offer
+	Misses []string
+}
+
+// Market lists the single-GPU hosts the marketplace has for a card, with the
+// plan's floors each one misses.
+//
+// It exists because a refusal from the ranker says only that nothing
+// qualified. The useful answer is which floor, and by how much, so the
+// operator can choose between relaxing RAM, cores, link speed or region with
+// the real market in front of them.
+func (r *Runner) Market(ctx context.Context, p Plan) ([]Candidate, error) {
+	if err := p.Normalise(); err != nil {
+		return nil, err
+	}
+	opened, err := r.OpenProvider()
+	if err != nil {
+		return nil, err
+	}
+	c := p.Criteria()
+	// Search broadly; judge against the floors here, so every miss is named.
+	c.CPUCores, c.RAMGB, c.MinNetMbps, c.BlockRegions, c.MinReliability = 0, 0, 0, nil, 0
+	offers, err := singleGPU{opened}.Search(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	var out []Candidate
+	for _, o := range offers {
+		var miss []string
+		if o.CPUCores < p.MinCPUCores {
+			miss = append(miss, fmt.Sprintf("%d cores < %d", o.CPUCores, p.MinCPUCores))
+		}
+		if o.RAMGB < p.MinRAMGB {
+			miss = append(miss, fmt.Sprintf("%d GB RAM < %d", o.RAMGB, p.MinRAMGB))
+		}
+		if o.NetDownMbps < p.MinNetMbps {
+			miss = append(miss, fmt.Sprintf("%.0f Mbps < %.0f", o.NetDownMbps, p.MinNetMbps))
+		}
+		for _, b := range p.BlockRegions {
+			if strings.Contains(strings.ToLower(o.Region), strings.ToLower(b)) {
+				miss = append(miss, "region "+o.Region)
+			}
+		}
+		if o.PriceHr > p.MaxPriceHr {
+			miss = append(miss, fmt.Sprintf("$%.3f/hr > $%.2f", o.PriceHr, p.MaxPriceHr))
+		}
+		req := (&Engine{Plan: p}).Requires()
+		if cuda, err := strconv.ParseFloat(o.CUDAVersion, 64); err == nil {
+			if ok, why := req.SatisfiesCUDA(cuda); !ok {
+				miss = append(miss, why)
+			}
+		}
+		if ok, why := req.Satisfies(o.ComputeCapability); !ok {
+			miss = append(miss, why)
+		}
+		if o.Reliability > 0 && o.Reliability < 0.95 {
+			miss = append(miss, fmt.Sprintf("reliability %.2f < 0.95", o.Reliability))
+		}
+		out = append(out, Candidate{Offer: o, Misses: miss})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].Misses) != len(out[j].Misses) {
+			return len(out[i].Misses) < len(out[j].Misses)
+		}
+		return out[i].Offer.PriceHr < out[j].Offer.PriceHr
+	})
+	return out, nil
 }
 
 // refuseIfBilling stops a run when something earlier may still be billing.

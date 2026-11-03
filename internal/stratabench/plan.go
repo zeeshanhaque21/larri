@@ -88,6 +88,12 @@ type Plan struct {
 	Version  string // Strata release
 	Flavor   string // image flavor; empty takes the card's own
 
+	// ImageRepo is the registry path the image is pulled from. Empty takes
+	// DefaultImageRepo, which is a Vast-compatible rebuild; see
+	// docker/strata-bench/Dockerfile for why Strata's own image cannot be
+	// rented directly.
+	ImageRepo string
+
 	MinRAMGB    int
 	MinCPUCores int
 	MinNetMbps  float64
@@ -151,7 +157,7 @@ func (p *Plan) Normalise() error {
 	// operating system and the engine's own working set.
 	if p.MinRAMGB == 0 {
 		if rest := foot - p.Card.VRAMGB; rest > 0 {
-			p.MinRAMGB = rest + 16
+			p.MinRAMGB = rest + 10
 		} else {
 			p.MinRAMGB = 16
 		}
@@ -187,9 +193,17 @@ func (p Plan) MinCUDA() int {
 	return 130
 }
 
+// DefaultImageRepo is where the Vast-compatible image is expected. Strata's
+// own image, ghcr.io/niko1221/strata, is not usable on Vast as published.
+const DefaultImageRepo = "ghcr.io/zeeshanhaque21/strata-bench"
+
 // Image is the container image to rent the host with.
 func (p Plan) Image() string {
-	return fmt.Sprintf("ghcr.io/niko1221/strata:%s-%s", p.Version, p.Flavor)
+	repo := p.ImageRepo
+	if repo == "" {
+		repo = DefaultImageRepo
+	}
+	return fmt.Sprintf("%s:%s-%s", repo, p.Version, p.Flavor)
 }
 
 // Criteria is the marketplace filter for this plan.

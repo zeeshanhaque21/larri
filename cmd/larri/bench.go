@@ -62,6 +62,7 @@ type planFlags struct {
 	model, context      string
 	kv, version, flavor string
 	hfEndpoint          string
+	imageRepo           string
 	parallel, minRAM    int
 	minCores, disk      int
 	minNet, maxPrice    float64
@@ -76,6 +77,7 @@ func (pf *planFlags) register(f *flag.FlagSet) {
 	f.StringVar(&pf.flavor, "flavor", "", "image flavor, cuda12 or cuda13 (default: the card's own)")
 	f.Var(&pf.blockRegions, "block-region", "exclude hosts in regions containing this text, repeatable (default: China)")
 	f.StringVar(&pf.hfEndpoint, "hf-endpoint", "", "download the model through a Hugging Face mirror, e.g. https://hf-mirror.com (lifts the China block)")
+	f.StringVar(&pf.imageRepo, "image-repo", os.Getenv("LARRI_BENCH_IMAGE_REPO"), "registry path of the Vast-compatible Strata image (default "+stratabench.DefaultImageRepo+")")
 	f.IntVar(&pf.parallel, "parallel", 2, "requests Strata answers at once")
 	f.IntVar(&pf.minRAM, "min-ram", 0, "host RAM floor in GB (default: sized from the model)")
 	f.IntVar(&pf.minCores, "min-cores", 8, "host CPU core floor")
@@ -99,7 +101,7 @@ func (pf *planFlags) plans() ([]stratabench.Plan, error) {
 		p.Version, p.Flavor, p.Parallel = pf.version, pf.flavor, pf.parallel
 		p.MinRAMGB, p.MinCPUCores, p.DiskGB = pf.minRAM, pf.minCores, pf.disk
 		p.MinNetMbps, p.MaxPriceHr = pf.minNet, pf.maxPrice
-		p.HFEndpoint = pf.hfEndpoint
+		p.HFEndpoint, p.ImageRepo = pf.hfEndpoint, pf.imageRepo
 		switch {
 		case len(pf.blockRegions) > 0:
 			p.BlockRegions = pf.blockRegions
@@ -153,6 +155,7 @@ func benchOffers(ctx context.Context, args []string) error {
 		sv, err := r.Preview(ctx, p)
 		if err != nil {
 			fmt.Printf("  no offer: %v\n", err)
+			explainMarket(ctx, r, p)
 			continue
 		}
 		describeOffer(sv.Selection.Selected.Offer, sv.Offers)
@@ -161,9 +164,32 @@ func benchOffers(ctx context.Context, args []string) error {
 	return nil
 }
 
+// explainMarket shows what the marketplace has for a card and which floors
+// each host misses, so a refusal comes with the way out of it.
+func explainMarket(ctx context.Context, r *stratabench.Runner, p stratabench.Plan) {
+	cands, err := r.Market(ctx, p)
+	if err != nil || len(cands) == 0 {
+		fmt.Println("  the marketplace lists no single-GPU host for this card at all")
+		return
+	}
+	fmt.Println("  single-GPU hosts that exist, fewest missed floors first:")
+	for i, c := range cands {
+		if i == 8 {
+			fmt.Printf("  ... and %d more\n", len(cands)-i)
+			break
+		}
+		o := c.Offer
+		miss := "meets every floor"
+		if len(c.Misses) > 0 {
+			miss = "misses: " + strings.Join(c.Misses, "; ")
+		}
+		fmt.Printf("    $%.3f/hr %2d cores %3dGB RAM %5.0f Mbps %-18s %s\n", o.PriceHr, o.CPUCores, o.RAMGB, o.NetDownMbps, o.Region, miss)
+	}
+}
+
 func describeOffer(o core.Offer, considered int) {
-	fmt.Printf("  would rent: %s %dGB  $%.3f/hr  %d cores  %dGB RAM  %.0f Mbps  reliability %.2f  %s  driver %s cuda %s  (%d offers considered)\n",
-		o.GPUModel, o.VRAMPerGPUGB, o.PriceHr, o.CPUCores, o.RAMGB, o.NetDownMbps, o.Reliability, o.Region,
+	fmt.Printf("  would rent: %dx %s %dGB  $%.3f/hr  %d cores  %dGB RAM  %.0f Mbps  reliability %.2f  %s  driver %s cuda %s  (%d offers considered)\n",
+		o.GPUCount, o.GPUModel, o.VRAMPerGPUGB, o.PriceHr, o.CPUCores, o.RAMGB, o.NetDownMbps, o.Reliability, o.Region,
 		o.DriverVersion, o.CUDAVersion, considered)
 }
 
