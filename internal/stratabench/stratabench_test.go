@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -731,5 +732,53 @@ func TestWrapperKeepsTheOptionalInterfacesTheDaemonNeeds(t *testing.T) {
 	// A provider that cannot attach says so instead of pretending.
 	if err := (benchProvider{fixedProvider{}}).AttachSSHKey(context.Background(), "1", "k"); err == nil {
 		t.Error("attach on a provider without support should fail")
+	}
+}
+
+// runLikeSSH runs a command the way x/crypto/ssh does: through a shell, with
+// output captured in a buffer, returning only when the pipes close.
+func runLikeSSH(t *testing.T, cmd string) time.Duration {
+	t.Helper()
+	var buf strings.Builder
+	c := exec.Command("bash", "-c", cmd)
+	c.Stdout, c.Stderr = &buf, &buf
+	start := time.Now()
+	if err := c.Run(); err != nil {
+		t.Fatalf("run: %v (%s)", err, buf.String())
+	}
+	return time.Since(start)
+}
+
+func TestBackgroundCommandsReturnWithoutHoldingTheChannel(t *testing.T) {
+	// A stand-in that lives for 6 seconds. If the command leaks its output
+	// pipes the call waits for it; the real ones live for the whole run.
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "smi")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 6\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if d := runLikeSSH(t, samplerCommand(fake, filepath.Join(dir, "logs"), filepath.Join(dir, "logs", "gpu.csv"))); d > 3*time.Second {
+		t.Errorf("sampler command held the channel for %v", d)
+	}
+	script := filepath.Join(dir, "launch.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 6\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if d := runLikeSSH(t, launchCommand("k3y", script, filepath.Join(dir, "launch.log"))); d > 3*time.Second {
+		t.Errorf("launch command held the channel for %v", d)
+	}
+}
+
+func TestTheOldSamplerFormHangsTheChannel(t *testing.T) {
+	// Pins the cause: the form that shipped first backgrounded a compound
+	// list, and this proves the test above can tell the difference.
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "smi")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 4\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := "mkdir -p " + dir + "/l && nohup " + fake + " >" + dir + "/l/gpu.csv 2>&1 &"
+	if d := runLikeSSH(t, old); d < 3*time.Second {
+		t.Errorf("the old form returned in %v; the regression test would not catch it", d)
 	}
 }

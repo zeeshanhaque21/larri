@@ -101,11 +101,27 @@ const factsCmd = `echo '## gpu'; nvidia-smi --query-gpu=index,name,driver_versio
 	`echo '## disk'; df -BG /data 2>/dev/null | tail -1 || df -BG / | tail -1; ` +
 	`echo '## os'; . /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"; uname -r`
 
-// samplerCmd records GPU power, clocks and temperature once a second, so a
+// samplerCommand records GPU power, clocks and temperature once a second, so a
 // result can say whether the card throttled during the run.
-const samplerCmd = `mkdir -p ` + logDir + ` && nohup nvidia-smi ` +
-	`--query-gpu=timestamp,power.draw,clocks.sm,clocks.mem,temperature.gpu,utilization.gpu,memory.used ` +
-	`--format=csv,noheader,nounits -l 1 >` + gpuLog + ` 2>&1 &`
+//
+// Only the sampler is backgrounded, with all three of its streams redirected.
+// An ssh exec call returns when the command's output pipes close, not when the
+// command exits, so a backgrounded compound list such as `mkdir && prog &`
+// keeps the pipes open for as long as the program lives and the call never
+// returns. The first live run hung exactly that way, with the host idle and
+// billing.
+func samplerCommand(smi, dir, log string) string {
+	return "mkdir -p " + dir + "; nohup " + smi +
+		" --query-gpu=timestamp,power.draw,clocks.sm,clocks.mem,temperature.gpu,utilization.gpu,memory.used" +
+		" --format=csv,noheader,nounits -l 1 >" + log + " 2>&1 </dev/null &"
+}
+
+// launchCommand starts the launch script detached, with the credential in the
+// environment of that one command and every stream redirected for the reason
+// samplerCommand gives.
+func launchCommand(key, script, log string) string {
+	return "STRATA_LAUNCH_KEY=" + runtime.ShellQuote(key) + " nohup sh " + script + " >" + log + " 2>&1 </dev/null &"
+}
 
 // Bootstrap verifies the engine matches the card before anything is
 // downloaded, reads the host's facts, and starts the GPU sampler.
@@ -159,7 +175,7 @@ func (e *Engine) Bootstrap(ctx context.Context, sess runtime.Session,
 	if _, err := sess.Run(ctx, install); err != nil {
 		return errs.Newf(errs.ClassHostFailure, "stratabench.Bootstrap", "install launch script: %v", err)
 	}
-	if _, err := sess.Run(ctx, samplerCmd); err != nil {
+	if _, err := sess.Run(ctx, samplerCommand("nvidia-smi", logDir, gpuLog)); err != nil {
 		// Telemetry is optional: a missing sampler costs a column of the
 		// report, not the measurement.
 		say("gpu sampler did not start: " + err.Error())
@@ -223,8 +239,7 @@ func (e *Engine) Launch(ctx context.Context, sess runtime.Session,
 		return runtime.Endpoint{}, errs.Newf(errs.ClassModelFailure, "stratabench.Launch",
 			"invalid bind address %s: loopback only", ep.Host)
 	}
-	cmd := fmt.Sprintf("STRATA_LAUNCH_KEY=%s nohup sh %s/launch.sh >%s 2>&1 </dev/null &",
-		runtime.ShellQuote(key.Reveal()), runtimeRoot, runtimeLog)
+	cmd := launchCommand(key.Reveal(), runtimeRoot+"/launch.sh", runtimeLog)
 	if _, err := sess.Run(ctx, cmd); err != nil {
 		return runtime.Endpoint{}, errs.Newf(errs.ClassHostFailure, "stratabench.Launch", "start launch: %v", err)
 	}
