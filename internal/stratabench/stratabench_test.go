@@ -669,13 +669,15 @@ type fixedProvider struct {
 	offers []core.Offer
 }
 
+func (fixedProvider) Name() string { return "fixed" }
+
 func (f fixedProvider) Search(context.Context, core.Criteria) ([]core.Offer, error) {
 	return f.offers, nil
 }
 
 func TestSearchNeverOffersMultiGPUHosts(t *testing.T) {
 	// The cheapest listing is the two-card box; it must not reach the ranker.
-	p := singleGPU{fixedProvider{offers: []core.Offer{
+	p := benchProvider{fixedProvider{offers: []core.Offer{
 		{OfferID: "two", GPUCount: 2, PriceHr: 0.20},
 		{OfferID: "one", GPUCount: 1, PriceHr: 0.25},
 		{OfferID: "four", GPUCount: 4, PriceHr: 0.30},
@@ -691,5 +693,43 @@ func TestImageRepoCanBeOverridden(t *testing.T) {
 	p.ImageRepo = "ghcr.io/someone/strata-bench"
 	if got := p.Image(); got != "ghcr.io/someone/strata-bench:0.2.9-cuda12" {
 		t.Errorf("image = %s", got)
+	}
+}
+
+type attachingProvider struct {
+	fixedProvider
+	attached string
+}
+
+func (a *attachingProvider) AttachSSHKey(_ context.Context, id, key string) error {
+	a.attached = id + ":" + key
+	return nil
+}
+
+func (a *attachingProvider) BootLog(context.Context, string, int) ([]string, error) {
+	return []string{"line"}, nil
+}
+
+func TestWrapperKeepsTheOptionalInterfacesTheDaemonNeeds(t *testing.T) {
+	// The daemon recovers a host that overwrote the startup key by attaching
+	// the key through the provider. Hiding that interface turned a recoverable
+	// race into a failed run, so the wrapper must pass it through.
+	under := &attachingProvider{}
+	var p provider.Provider = benchProvider{under}
+	att, ok := p.(provider.KeyAttacher)
+	if !ok {
+		t.Fatal("wrapper does not satisfy provider.KeyAttacher")
+	}
+	if err := att.AttachSSHKey(context.Background(), "42", "ssh-ed25519 AAAA"); err != nil || under.attached != "42:ssh-ed25519 AAAA" {
+		t.Errorf("attach did not reach the provider: %v %q", err, under.attached)
+	}
+	if bl, ok := p.(provider.BootLogger); !ok {
+		t.Error("wrapper does not satisfy provider.BootLogger")
+	} else if lines, err := bl.BootLog(context.Background(), "42", 5); err != nil || len(lines) != 1 {
+		t.Errorf("boot log did not reach the provider: %v %v", lines, err)
+	}
+	// A provider that cannot attach says so instead of pretending.
+	if err := (benchProvider{fixedProvider{}}).AttachSSHKey(context.Background(), "1", "k"); err == nil {
+		t.Error("attach on a provider without support should fail")
 	}
 }

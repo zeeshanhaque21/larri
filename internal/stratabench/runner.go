@@ -52,16 +52,23 @@ func (r *Runner) logf(format string, args ...any) {
 	}
 }
 
-// singleGPU hides multi-GPU hosts from the ranker.
+// benchProvider adapts a provider for a one-card benchmark.
 //
-// The marketplace filter can only say "at least one GPU", and a two-card box
-// is often the cheapest listing of a card, so without this the ranker picks
-// it first and a benchmark of one card would run on two. Filtering the search
-// result means the ranker, the preview and the fallback all see the same
-// market, which a refusal at confirmation time could not guarantee.
-type singleGPU struct{ provider.Provider }
+// It hides multi-GPU hosts from the ranker. The marketplace filter can only
+// say "at least one GPU", and a two-card box is often the cheapest listing of
+// a card, so without this the ranker picks it first and a benchmark of one
+// card would run on two. Filtering the search result means the ranker, the
+// preview and the fallback all see the same market, which a refusal at
+// confirmation time could not guarantee.
+//
+// It also forwards the provider's optional interfaces. Wrapping a provider in
+// a struct that embeds only provider.Provider hides them, and the daemon finds
+// them by type assertion: with KeyAttacher hidden, a host that overwrote the
+// startup key could not be recovered, and the first live run on Strata's image
+// failed that way. A test pins the forwarding.
+type benchProvider struct{ provider.Provider }
 
-func (s singleGPU) Search(ctx context.Context, c core.Criteria) ([]core.Offer, error) {
+func (s benchProvider) Search(ctx context.Context, c core.Criteria) ([]core.Offer, error) {
 	offers, err := s.Provider.Search(ctx, c)
 	if err != nil {
 		return nil, err
@@ -75,12 +82,49 @@ func (s singleGPU) Search(ctx context.Context, c core.Criteria) ([]core.Offer, e
 	return kept, nil
 }
 
+// AttachSSHKey forwards provider.KeyAttacher.
+func (s benchProvider) AttachSSHKey(ctx context.Context, instanceID, publicKey string) error {
+	a, ok := s.Provider.(provider.KeyAttacher)
+	if !ok {
+		return fmt.Errorf("stratabench: attach key: %s does not support it", s.Name())
+	}
+	return a.AttachSSHKey(ctx, instanceID, publicKey)
+}
+
+// BootLog forwards provider.BootLogger.
+func (s benchProvider) BootLog(ctx context.Context, instanceID string, tail int) ([]string, error) {
+	b, ok := s.Provider.(provider.BootLogger)
+	if !ok {
+		return nil, fmt.Errorf("stratabench: boot log: %s does not support it", s.Name())
+	}
+	return b.BootLog(ctx, instanceID, tail)
+}
+
+// SetOnDrift and SetOnNotice forward provider.Reporter.
+func (s benchProvider) SetOnDrift(f func(error)) {
+	if r, ok := s.Provider.(provider.Reporter); ok {
+		r.SetOnDrift(f)
+	}
+}
+
+func (s benchProvider) SetOnNotice(f func(string)) {
+	if r, ok := s.Provider.(provider.Reporter); ok {
+		r.SetOnNotice(f)
+	}
+}
+
+var (
+	_ provider.KeyAttacher = benchProvider{}
+	_ provider.BootLogger  = benchProvider{}
+	_ provider.Reporter    = benchProvider{}
+)
+
 func (r *Runner) orchestrator(p Plan, events chan<- daemon.Event) (*daemon.Orchestrator, *Engine, error) {
 	opened, err := r.OpenProvider()
 	if err != nil {
 		return nil, nil, err
 	}
-	prov := singleGPU{opened}
+	prov := benchProvider{opened}
 	policy := rank.DefaultPolicy()
 	policy.SessionHours = 1
 	eng := &Engine{Plan: p}
@@ -139,7 +183,7 @@ func (r *Runner) Market(ctx context.Context, p Plan) ([]Candidate, error) {
 	c := p.Criteria()
 	// Search broadly; judge against the floors here, so every miss is named.
 	c.CPUCores, c.RAMGB, c.MinNetMbps, c.BlockRegions, c.MinReliability = 0, 0, 0, nil, 0
-	offers, err := singleGPU{opened}.Search(ctx, c)
+	offers, err := benchProvider{opened}.Search(ctx, c)
 	if err != nil {
 		return nil, err
 	}
