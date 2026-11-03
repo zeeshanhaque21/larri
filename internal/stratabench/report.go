@@ -87,15 +87,23 @@ func Report(results []*Result, o ReportOptions) string {
 	b.WriteString("Where the engine reported its own timers they are used; otherwise client-side arithmetic is used and the raw results say so.\n\n")
 
 	b.WriteString("## Runs\n\n")
-	b.WriteString("| Card | Host CPU | Cores | RAM GB | Driver | $/hr | Ready after | Boot cost | Run cost | Strata | Model | Runs |\n")
-	b.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | --- | ---: |\n")
+	b.WriteString("| Card | Host CPU | Cores | RAM GB | Driver | $/hr quoted | $/hr billed | Ready after | Boot cost | Run cost | Strata | Model | Runs |\n")
+	b.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |\n")
 	for _, k := range cards {
 		r := latest[k]
-		fmt.Fprintf(&b, "| %s | %s | %d | %d | %s | %s | %s | %s | %s | %s %s | %s %s, %s ctx, x%d | %d |\n",
+		run, boot := r.Cost.TotalUSD, r.Cost.BootUSD
+		if r.Billing.RunUSD > 0 {
+			run = r.Billing.RunUSD
+		}
+		if r.Billing.BootUSD > 0 {
+			boot = r.Billing.BootUSD
+		}
+		fmt.Fprintf(&b, "| %s | %s | %d | %d | %s | %s | %s | %s | %s | %s | %s %s | %s %s, %s ctx, x%d | %d |\n",
 			k, orDash(r.Host.CPUModel), r.Host.CPUs, r.Host.RAMMiB/1024, orDash(r.Host.Driver),
-			usd(r.Offer.PriceHr), minutes(r.ReadySec), usd(r.Cost.BootUSD), usd(r.Cost.TotalUSD),
+			usd(r.Offer.PriceHr), usd(r.Billing.AtEnd.HourlyUSD), minutes(r.ReadySec), usd(boot), usd(run),
 			r.Strata.Version, r.Strata.Flavor, r.Strata.Family, r.Strata.Model, r.Strata.Context, r.Strata.Parallel, count[k])
 	}
+	b.WriteString("\nQuoted is the marketplace's listed hourly rate, which leaves out the rented disk. Billed is what the provider charged per hour including it; run and boot cost add the data moved. Prices in the sections below use the billed figures when a result has them.\n")
 	b.WriteString("\nHost CPU and RAM are part of the result: Strata runs the experts that do not fit in VRAM on the CPU, so two rentals of the same card can differ.\n\n")
 
 	b.WriteString("## Performance\n\n")
@@ -189,7 +197,7 @@ func Report(results []*Result, o ReportOptions) string {
 	b.WriteString("## Read this before deciding\n\n")
 	b.WriteString("- The hosted API serves different weights from the open model Strata runs, at a different quantisation. This compares cost, not quality.\n")
 	b.WriteString("- Results depend on the host the marketplace assigned. Repeat a card on a second host before trusting a small gap.\n")
-	b.WriteString("- Rig costs are the marketplace's listed rate. Storage and bandwidth charges are not in the hourly figure.\n")
+	b.WriteString("- Rig costs use what the provider billed when a result recorded it, which includes the rented disk and the data moved. A result without billing falls back to the quoted rate, which understates the cost.\n")
 	b.WriteString("- Break-even assumes a steady request rate. Bursty traffic leaves the rig idle and billing.\n")
 	return b.String()
 }

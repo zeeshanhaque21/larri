@@ -137,6 +137,10 @@ type Result struct {
 	GPU      GPUSummary       `json:"gpu"`
 	Cost     core.CostSummary `json:"cost"`
 
+	// Billing is the provider's own account of the run. Cost above is the
+	// journal's, which counts compute at the quoted rate and nothing else.
+	Billing Billing `json:"billing"`
+
 	// ReadySec is time from the rental request to a served completion. It is
 	// billed, and it is the part of renting an API does not have.
 	ReadySec float64 `json:"ready_s"`

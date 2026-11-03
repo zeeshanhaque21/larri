@@ -91,6 +91,24 @@ type Offer struct {
 	Region        string  `json:"region"`
 	PriceHr       float64 `json:"price_hr"`
 	Interruptible bool    `json:"interruptible"`
+
+	// Prices a quoted hourly rate leaves out. PriceHr is what the marketplace
+	// lists for a small default disk; a rented disk is billed on top of it by
+	// the gigabyte-month, and every gigabyte downloaded is billed by the
+	// terabyte. On a live run the quote was $0.083/hr and the account was
+	// charged $0.2226/hr plus about a dollar of bandwidth, so a spend decision
+	// made from PriceHr alone was wrong by a factor of fifteen. Zero means the
+	// provider did not report the figure, which is not the same as free.
+	PriceBaseHr          float64 `json:"price_base_hr,omitempty"`        // compute only
+	StorageUSDPerGBMonth float64 `json:"storage_usd_gb_month,omitempty"` // rented disk
+	NetDownUSDPerTB      float64 `json:"net_down_usd_tb,omitempty"`      // inbound data
+	NetUpUSDPerTB        float64 `json:"net_up_usd_tb,omitempty"`        // outbound data
+
+	// CPUName and CPUCoresEffective describe the processor a renter actually
+	// gets. Providers list a host's total cores, and a rented container is
+	// given a share of them: one V100 host listed 80 cores and delivered 20.
+	CPUName           string  `json:"cpu_name,omitempty"`
+	CPUCoresEffective float64 `json:"cpu_cores_effective,omitempty"`
 	// Reliability is the provider's own score, normalised 0..1. **Zero means
 	// the provider does not report one**, which is not the same as a host
 	// that always fails — no marketplace lists those. Ask HasReliability

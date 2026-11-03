@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -63,6 +64,8 @@ type planFlags struct {
 	kv, version, flavor string
 	hfEndpoint          string
 	imageRepo, image    string
+	offerID             string
+	maxNetCost          float64
 	parallel, minRAM    int
 	minCores, disk      int
 	minNet, maxPrice    float64
@@ -79,6 +82,8 @@ func (pf *planFlags) register(f *flag.FlagSet) {
 	f.StringVar(&pf.hfEndpoint, "hf-endpoint", "", "download the model through a Hugging Face mirror, e.g. https://hf-mirror.com (lifts the China block)")
 	f.StringVar(&pf.imageRepo, "image-repo", os.Getenv("LARRI_BENCH_IMAGE_REPO"), "registry path of the Vast-compatible Strata image (default "+stratabench.DefaultImageRepo+")")
 	f.StringVar(&pf.image, "image", os.Getenv("LARRI_BENCH_IMAGE"), "full image reference, overriding --image-repo and the version tag")
+	f.StringVar(&pf.offerID, "offer", "", "rent exactly this marketplace offer ID, from the options table")
+	f.Float64Var(&pf.maxNetCost, "max-net-cost", 8, "exclude hosts charging more than this per TB of inbound data (0 = no limit)")
 	f.IntVar(&pf.parallel, "parallel", 2, "requests Strata answers at once")
 	f.IntVar(&pf.minRAM, "min-ram", 0, "host RAM floor in GB (default: sized from the model)")
 	f.IntVar(&pf.minCores, "min-cores", 8, "host CPU core floor")
@@ -103,6 +108,7 @@ func (pf *planFlags) plans() ([]stratabench.Plan, error) {
 		p.MinRAMGB, p.MinCPUCores, p.DiskGB = pf.minRAM, pf.minCores, pf.disk
 		p.MinNetMbps, p.MaxPriceHr = pf.minNet, pf.maxPrice
 		p.HFEndpoint, p.ImageRepo, p.ImageRef = pf.hfEndpoint, pf.imageRepo, pf.image
+		p.OfferID, p.MaxNetUSDPerTB = pf.offerID, pf.maxNetCost
 		switch {
 		case len(pf.blockRegions) > 0:
 			p.BlockRegions = pf.blockRegions
@@ -127,6 +133,11 @@ func benchRunner() (*stratabench.Runner, func(), error) {
 		OpenProvider: func() (provider.Provider, error) { return openProvider("vastai") },
 		Log:          func(s string) { fmt.Println(s) },
 	}
+	// The provider's own charges, so the spend ceiling sees the disk and the
+	// data moved and not only the quoted hourly rate.
+	if key := os.Getenv("VASTAI_API_KEY"); key != "" {
+		r.Billing = stratabench.VastBilling{Key: key}
+	}
 	return r, func() { st.Close() }, nil
 }
 
@@ -134,8 +145,18 @@ func benchOffers(ctx context.Context, args []string) error {
 	f := flag.NewFlagSet("bench offers", flag.ContinueOnError)
 	var pf planFlags
 	pf.register(f)
+	options := f.Int("options", 8, "how many hosts to list per card")
+	sortBy := f.String("sort", "total", "order eligible hosts by total (all-in cost), speed (download link) or price (hourly)")
+	matrix := f.String("matrix", "standard", "matrix the cost is estimated for: quick, standard or full")
 	if err := f.Parse(args); err != nil {
 		return err
+	}
+	m, err := stratabench.ParseMatrix(*matrix)
+	if err != nil {
+		return err
+	}
+	if *sortBy != "total" && *sortBy != "speed" && *sortBy != "price" {
+		return fmt.Errorf("bench: --sort: %q is not total, speed or price", *sortBy)
 	}
 	plans, err := pf.plans()
 	if err != nil {
@@ -146,23 +167,74 @@ func benchOffers(ctx context.Context, args []string) error {
 		return err
 	}
 	defer closeFn()
+	r.Matrix = m
 	for _, p := range plans {
 		fmt.Printf("\n%s  %s %s, %s context, image %s\n", p.Card.Key, p.Family, p.Model, p.Context, p.Image())
 		if p.HFEndpoint != "" {
 			fmt.Printf("  model download through mirror %s\n", p.HFEndpoint)
 		}
-		fmt.Printf("  filter: 1x %s >=%dGB VRAM, >=%d cores, >=%dGB RAM, >=%.0f Mbps, <=$%.2f/hr, disk %dGB\n",
-			p.Card.VastName, p.Card.VRAMGB-2, p.MinCPUCores, p.MinRAMGB, p.MinNetMbps, p.MaxPriceHr, p.DiskGB)
-		sv, err := r.Preview(ctx, p)
+		fmt.Printf("  floors: >=%d usable cores, >=%dGB RAM, >=%.0f Mbps, <=$%.2f/hr, <=$%.1f/TB inbound; %dGB disk, ~%dGB download\n",
+			p.MinCPUCores, p.MinRAMGB, p.MinNetMbps, p.MaxPriceHr, p.MaxNetUSDPerTB, p.DiskGB, p.DownloadGB)
+		cands, err := r.Market(ctx, p)
 		if err != nil {
-			fmt.Printf("  no offer: %v\n", err)
-			explainMarket(ctx, r, p)
+			fmt.Printf("  no market: %v\n", err)
 			continue
 		}
-		describeOffer(sv.Selection.Selected.Offer, sv.Offers)
+		printOptions(cands, *options, *sortBy)
 	}
-	fmt.Println("\nnothing was spent")
+	fmt.Println("\nnothing was spent. Costs are estimates from published prices; the boot time assumes")
+	fmt.Println("20 minutes of preparation after the download, from one run. Pin a host with --offer ID.")
 	return nil
+}
+
+// printOptions lists the hosts a benchmark could use, best first, then the ones
+// that miss a floor and why.
+func printOptions(cands []stratabench.Candidate, limit int, sortBy string) {
+	var ok, bad []stratabench.Candidate
+	for _, c := range cands {
+		if len(c.Misses) == 0 {
+			ok = append(ok, c)
+		} else {
+			bad = append(bad, c)
+		}
+	}
+	sort.SliceStable(ok, func(i, j int) bool {
+		a, b := ok[i], ok[j]
+		switch sortBy {
+		case "speed":
+			return a.Offer.NetDownMbps > b.Offer.NetDownMbps
+		case "price":
+			return a.Estimate.HourlyUSD < b.Estimate.HourlyUSD
+		}
+		return a.Estimate.TotalUSD < b.Estimate.TotalUSD
+	})
+	if len(ok) == 0 {
+		fmt.Println("  no host meets every floor")
+	} else {
+		fmt.Printf("  %-9s %6s %6s %5s %5s %6s %7s  %-9s %-4s %-16s %s\n",
+			"offer", "$/hr", "Mbps", "boot", "$/TB", "total", "cores", "RAM", "drv", "region", "cpu")
+		for i, c := range ok {
+			if i == limit {
+				fmt.Printf("  ... and %d more\n", len(ok)-i)
+				break
+			}
+			o := c.Offer
+			fmt.Printf("  %-9s %6.3f %6.0f %4.0fm %5.1f %6.2f %3.0f/%-3d %4dGB   %-4.4s %-16.16s %s\n",
+				o.OfferID, c.Estimate.HourlyUSD, o.NetDownMbps, c.Estimate.BootMin, o.NetDownUSDPerTB,
+				c.Estimate.TotalUSD, o.CPUCoresEffective, o.CPUCores, o.RAMGB, o.DriverVersion, o.Region, o.CPUName)
+		}
+	}
+	if len(bad) > 0 {
+		fmt.Println("  excluded:")
+		for i, c := range bad {
+			if i == 5 {
+				fmt.Printf("    ... and %d more\n", len(bad)-i)
+				break
+			}
+			o := c.Offer
+			fmt.Printf("    %-9s $%.3f/hr %5.0f Mbps %-16.16s %s\n", o.OfferID, c.Estimate.HourlyUSD, o.NetDownMbps, o.Region, strings.Join(c.Misses, "; "))
+		}
+	}
 }
 
 // explainMarket shows what the marketplace has for a card and which floors
@@ -189,7 +261,7 @@ func explainMarket(ctx context.Context, r *stratabench.Runner, p stratabench.Pla
 }
 
 func describeOffer(o core.Offer, considered int) {
-	fmt.Printf("  would rent: %dx %s %dGB  $%.3f/hr  %d cores  %dGB RAM  %.0f Mbps  reliability %.2f  %s  driver %s cuda %s  (%d offers considered)\n",
+	fmt.Printf("  would rent: %dx %s %dGB  $%.3f/hr quoted  %d cores  %dGB RAM  %.0f Mbps  reliability %.2f  %s  driver %s cuda %s  (%d offers considered)\n",
 		o.GPUCount, o.GPUModel, o.VRAMPerGPUGB, o.PriceHr, o.CPUCores, o.RAMGB, o.NetDownMbps, o.Reliability, o.Region,
 		o.DriverVersion, o.CUDAVersion, considered)
 }

@@ -22,6 +22,7 @@ import (
 	"go.sovrenix.com/larri/internal/core"
 	"go.sovrenix.com/larri/internal/provider"
 	"go.sovrenix.com/larri/internal/runtime"
+	"go.sovrenix.com/larri/internal/state"
 )
 
 func plan(t *testing.T, key string) Plan {
@@ -678,7 +679,7 @@ func (f fixedProvider) Search(context.Context, core.Criteria) ([]core.Offer, err
 
 func TestSearchNeverOffersMultiGPUHosts(t *testing.T) {
 	// The cheapest listing is the two-card box; it must not reach the ranker.
-	p := benchProvider{fixedProvider{offers: []core.Offer{
+	p := benchProvider{Provider: fixedProvider{offers: []core.Offer{
 		{OfferID: "two", GPUCount: 2, PriceHr: 0.20},
 		{OfferID: "one", GPUCount: 1, PriceHr: 0.25},
 		{OfferID: "four", GPUCount: 4, PriceHr: 0.30},
@@ -716,7 +717,7 @@ func TestWrapperKeepsTheOptionalInterfacesTheDaemonNeeds(t *testing.T) {
 	// the key through the provider. Hiding that interface turned a recoverable
 	// race into a failed run, so the wrapper must pass it through.
 	under := &attachingProvider{}
-	var p provider.Provider = benchProvider{under}
+	var p provider.Provider = benchProvider{Provider: under}
 	att, ok := p.(provider.KeyAttacher)
 	if !ok {
 		t.Fatal("wrapper does not satisfy provider.KeyAttacher")
@@ -730,7 +731,7 @@ func TestWrapperKeepsTheOptionalInterfacesTheDaemonNeeds(t *testing.T) {
 		t.Errorf("boot log did not reach the provider: %v %v", lines, err)
 	}
 	// A provider that cannot attach says so instead of pretending.
-	if err := (benchProvider{fixedProvider{}}).AttachSSHKey(context.Background(), "1", "k"); err == nil {
+	if err := (benchProvider{Provider: fixedProvider{}}).AttachSSHKey(context.Background(), "1", "k"); err == nil {
 		t.Error("attach on a provider without support should fail")
 	}
 }
@@ -797,5 +798,219 @@ func TestReadinessWaitOutlastsAStrataColdStart(t *testing.T) {
 	}
 	if o.ReadyCap >= o.Deadline {
 		t.Errorf("ready cap %v must sit inside the overall deadline %v", o.ReadyCap, o.Deadline)
+	}
+}
+
+// ---- cost estimate, host filters, billing and the guard -------------------
+
+// liveOffer is the host the first full run rented. Its quote was $0.083/hr; the
+// account was charged $0.2226/hr for the compute and the 124 GB disk, plus
+// inbound data at $16/TB.
+func liveOffer() core.Offer {
+	return core.Offer{OfferID: "57788272", GPUCount: 1, PriceHr: 0.083, PriceBaseHr: 0.07333333,
+		StorageUSDPerGBMonth: 0.86666667, NetDownUSDPerTB: 16, NetDownMbps: 768,
+		CPUCoresEffective: 18, RAMGB: 31}
+}
+
+func TestEstimateReproducesWhatTheLiveRunWasBilled(t *testing.T) {
+	p := plan(t, "2080ti22")
+	p.Model, p.DiskGB, p.DownloadGB = "iq3_xxs", 124, 76
+	e := EstimateRun(liveOffer(), p, 0.4)
+	// Vast billed $0.2226/hr: compute 0.0733 plus 124 GB x 0.8667 / 720.
+	if !within(e.HourlyUSD, 0.2226, 0.001) {
+		t.Errorf("hourly = %.4f, want 0.2226", e.HourlyUSD)
+	}
+	// 76 GB inbound at $16 per TB.
+	if !within(e.BandwidthUSD, 1.216, 1e-6) {
+		t.Errorf("bandwidth = %.4f, want 1.216", e.BandwidthUSD)
+	}
+	// 768 Mbps at 90 percent is 86.4 MB/s: 76 GB in about 14.7 minutes.
+	if !within(e.DownloadMin, 14.66, 0.01) {
+		t.Errorf("download minutes = %.2f, want ~14.7", e.DownloadMin)
+	}
+	// The quote said $0.10 total. Priced honestly it is several times that.
+	if e.TotalUSD < 1.4 {
+		t.Errorf("total = %.2f; the bandwidth alone is $1.22", e.TotalUSD)
+	}
+	if !e.Known {
+		t.Error("a host with a listed link speed should be estimable")
+	}
+}
+
+func TestEstimateTreatsUnreportedChargesAsZeroNotInvented(t *testing.T) {
+	p := plan(t, "v100")
+	o := core.Offer{PriceHr: 0.2, NetDownMbps: 1000}
+	e := EstimateRun(o, p, 0.4)
+	if e.BandwidthUSD != 0 || e.HourlyUSD != 0.2 {
+		t.Errorf("estimate = %+v", e)
+	}
+	if got := EstimateRun(core.Offer{PriceHr: 0.2}, p, 0.4); got.Known {
+		t.Error("a host with no link speed should not claim a download estimate")
+	}
+}
+
+func TestVeryFastLinksAreCappedRatherThanTrusted(t *testing.T) {
+	p := plan(t, "v100")
+	fast := EstimateRun(core.Offer{PriceHr: 0.2, NetDownMbps: 8000}, p, 0.1)
+	slow := EstimateRun(core.Offer{PriceHr: 0.2, NetDownMbps: 1700}, p, 0.1)
+	// 8 Gbps would be 900 MB/s; the cap is 200, which 1700 Mbps (191 MB/s) is
+	// almost at, so the two should differ little.
+	if fast.DownloadMin <= 0 || fast.DownloadMin > slow.DownloadMin || slow.DownloadMin-fast.DownloadMin > 2 {
+		t.Errorf("fast %.2f min vs slow %.2f min", fast.DownloadMin, slow.DownloadMin)
+	}
+}
+
+func TestHostFiltersTheMarketplaceCannotExpress(t *testing.T) {
+	p := plan(t, "v100")
+	p.MaxNetUSDPerTB, p.MinCPUCores = 8, 8
+	good := core.Offer{OfferID: "1", GPUCount: 1, NetDownUSDPerTB: 2.7, CPUCoresEffective: 16}
+	cases := map[string]core.Offer{
+		"two GPUs":         {OfferID: "2", GPUCount: 2, CPUCoresEffective: 16},
+		"dear bandwidth":   {OfferID: "3", GPUCount: 1, NetDownUSDPerTB: 16, CPUCoresEffective: 16},
+		"few usable cores": {OfferID: "4", GPUCount: 1, NetDownUSDPerTB: 2.7, CPUCoresEffective: 5},
+	}
+	if m := extraMisses(good, p); len(m) != 0 {
+		t.Errorf("a good host was refused: %v", m)
+	}
+	for name, o := range cases {
+		if len(extraMisses(o, p)) == 0 {
+			t.Errorf("%s was not refused", name)
+		}
+	}
+	// Unreported figures pass: absence is not evidence of a bad host.
+	if m := extraMisses(core.Offer{GPUCount: 1}, p); len(m) != 0 {
+		t.Errorf("a host that reports no bandwidth or core detail was refused: %v", m)
+	}
+	// A pinned offer excludes every other.
+	p.OfferID = "1"
+	if len(extraMisses(good, p)) != 0 || len(extraMisses(core.Offer{OfferID: "9", GPUCount: 1}, p)) == 0 {
+		t.Error("pinning did not select exactly one offer")
+	}
+}
+
+func TestVastBillingReadsCreditAndBothInstanceShapes(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/current/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer k" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"credit": 8.4729, "balance": 0}`)
+	})
+	inst := `{"dph_total":0.2226,"inet_down_billed":53791948.8,"inet_up_billed":397312.0,
+		"internet_down_cost_per_tb":16.0,"internet_up_cost_per_tb":17.3,"disk_space":124,"storage_cost":0.8667}`
+	mux.HandleFunc("/instances/1/", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{"instances":`+inst+`}`) })
+	mux.HandleFunc("/instances/2/", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{"instances":[`+inst+`]}`) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	v := VastBilling{Key: "k", Base: srv.URL}
+	if c, err := v.Credit(context.Background()); err != nil || c != 8.4729 {
+		t.Fatalf("credit = %v, %v", c, err)
+	}
+	for _, id := range []string{"1", "2"} {
+		b, err := v.Instance(context.Background(), id)
+		if err != nil {
+			t.Fatalf("instance %s: %v", id, err)
+		}
+		if !within(b.DownGB, 53.79, 0.001) || b.HourlyUSD != 0.2226 || b.DownUSDPerTB != 16 {
+			t.Errorf("instance %s = %+v", id, b)
+		}
+		// 15 minutes at $0.2226 plus 53.8 GB inbound at $16/TB and 0.4 GB out.
+		want := 0.2226*0.25 + 53.79*16/1000 + 0.397*17.3/1000
+		if got := b.SpendUSD(15 * time.Minute); !within(got, want, 0.001) {
+			t.Errorf("spend = %.4f, want %.4f", got, want)
+		}
+	}
+	if _, err := (VastBilling{Key: "wrong", Base: srv.URL}).Credit(context.Background()); err == nil {
+		t.Error("a rejected key should be an error")
+	}
+	if _, err := v.Instance(context.Background(), "9"); err == nil {
+		t.Error("a missing instance should be an error")
+	}
+}
+
+type fakeBiller struct {
+	mu      sync.Mutex
+	credits []float64
+	calls   int
+}
+
+func (f *fakeBiller) Credit(context.Context) (float64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := f.calls
+	if i >= len(f.credits) {
+		i = len(f.credits) - 1
+	}
+	f.calls++
+	return f.credits[i], nil
+}
+func (*fakeBiller) Instance(context.Context, string) (InstanceBill, error) {
+	return InstanceBill{}, fmt.Errorf("none")
+}
+
+func TestGuardStopsARunWhoseAccountBalanceFallsPastTheCeiling(t *testing.T) {
+	// The journal knows nothing of bandwidth, so the first live run sailed
+	// through a $1.00 ceiling. The balance is what actually moved.
+	st, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := &Runner{Store: st, MaxSpendUSD: 1.00, GuardEvery: 10 * time.Millisecond,
+		Billing: &fakeBiller{credits: []float64{8.47, 8.40, 7.90, 7.40}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var aborted string
+	done := make(chan struct{})
+	go func() {
+		r.guard(ctx, cancel, 8.47, true, &mu, &aborted)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("guard never fired")
+	}
+	if ctx.Err() == nil {
+		t.Error("guard did not cancel the run")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(aborted, "spend ceiling $1.00 passed") {
+		t.Errorf("aborted = %q", aborted)
+	}
+}
+
+func TestGuardLeavesACheapRunAlone(t *testing.T) {
+	st, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := &Runner{Store: st, MaxSpendUSD: 1.00, GuardEvery: 5 * time.Millisecond, Billing: &fakeBiller{credits: []float64{8.47}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var mu sync.Mutex
+	var aborted string
+	r.guard(ctx, cancel, 8.47, true, &mu, &aborted)
+	if aborted != "" {
+		t.Errorf("guard fired on a run that spent nothing: %s", aborted)
+	}
+}
+
+func TestResultsArePricedFromTheBillNotTheQuote(t *testing.T) {
+	r := result("2080ti22", time.Now(), 900, 38)
+	r.Offer.PriceHr = 0.083 // the quote
+	r.Billing = Billing{AtEnd: InstanceBill{HourlyUSD: 0.2226}, BootUSD: 1.05}
+	rt := RatesOf(r)
+	if rt.PriceHr != 0.2226 || rt.BootUSD != 1.05 {
+		t.Errorf("rates = hourly %.4f boot %.2f, want 0.2226 and 1.05", rt.PriceHr, rt.BootUSD)
+	}
+	// With no billing the quote is the best there is.
+	r.Billing = Billing{}
+	if RatesOf(r).PriceHr != 0.083 {
+		t.Error("without billing the quoted rate should be used")
 	}
 }

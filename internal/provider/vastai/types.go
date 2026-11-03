@@ -83,6 +83,15 @@ type wireOffer struct {
 	IsBid         *bool    `json:"is_bid"`
 	DriverVersion *string  `json:"driver_version"`
 	ComputeCap    *float64 `json:"compute_cap"`
+
+	// Billing and CPU detail. All optional: their absence leaves the
+	// matching core.Offer field zero, meaning unreported.
+	DPHBase           *float64 `json:"dph_base"`
+	StorageCost       *float64 `json:"storage_cost"`
+	InetDownCostTB    *float64 `json:"internet_down_cost_per_tb"`
+	InetUpCostTB      *float64 `json:"internet_up_cost_per_tb"`
+	CPUName           *string  `json:"cpu_name"`
+	CPUCoresEffective *float64 `json:"cpu_cores_effective"`
 }
 
 // normalise converts a wire offer into LARRI's vocabulary, refusing anything
@@ -135,6 +144,24 @@ func (o wireOffer) normalise() (core.Offer, error) {
 	}
 	if o.CPURAM != nil {
 		out.RAMGB = int(*o.CPURAM / mbPerGB)
+	}
+	if o.DPHBase != nil && *o.DPHBase >= 0 {
+		out.PriceBaseHr = *o.DPHBase
+	}
+	if o.StorageCost != nil && *o.StorageCost >= 0 {
+		out.StorageUSDPerGBMonth = *o.StorageCost
+	}
+	if o.InetDownCostTB != nil && *o.InetDownCostTB >= 0 {
+		out.NetDownUSDPerTB = *o.InetDownCostTB
+	}
+	if o.InetUpCostTB != nil && *o.InetUpCostTB >= 0 {
+		out.NetUpUSDPerTB = *o.InetUpCostTB
+	}
+	if o.CPUName != nil {
+		out.CPUName = strings.TrimSpace(*o.CPUName)
+	}
+	if o.CPUCoresEffective != nil && *o.CPUCoresEffective > 0 {
+		out.CPUCoresEffective = *o.CPUCoresEffective
 	}
 	if o.DiskSpace != nil {
 		out.DiskGB = int(*o.DiskSpace)

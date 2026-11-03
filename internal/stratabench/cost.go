@@ -41,6 +41,14 @@ type Rates struct {
 func RatesOf(r *Result) Rates {
 	rt := Rates{Card: r.CardKey, PriceHr: r.Offer.PriceHr, BootUSD: r.Cost.BootUSD,
 		PP: map[int]float64{}, AggTG: map[int]float64{}}
+	// Prefer what the provider billed to what it quoted: the quote left out
+	// the rented disk and the data moved.
+	if h := r.Billing.AtEnd.HourlyUSD; h > 0 {
+		rt.PriceHr = h
+	}
+	if r.Billing.BootUSD > 0 {
+		rt.BootUSD = r.Billing.BootUSD
+	}
 	for _, g := range r.Groups {
 		switch g.Kind {
 		case "prefill":

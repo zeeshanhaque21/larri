@@ -76,6 +76,18 @@ var quantFootprintGB = map[string]int{
 	"iq3_s":   55,
 }
 
+// quantDownloadGB is what Strata downloads for a model size, which is more
+// than the model: it also fetches the draft layer's source. iq3_xxs is
+// measured, from Strata's own "Downloading the model files: x of 75.8 GB". The
+// others add the same 27 GB to the footprint and are estimates until a run
+// measures them.
+var quantDownloadGB = map[string]int{
+	"q2_0":    65,
+	"iq2_xs":  67,
+	"iq3_xxs": 76,
+	"iq3_s":   82,
+}
+
 // Plan is one benchmark configuration. Two Plans that differ only in Card are
 // the comparison the bench exists to make.
 type Plan struct {
@@ -105,6 +117,20 @@ type Plan struct {
 	DiskGB      int
 	MaxPriceHr  float64
 
+	// DownloadGB is what the run will pull, for estimating bandwidth cost and
+	// time. Zero takes the model's known figure.
+	DownloadGB int
+
+	// MaxNetUSDPerTB excludes hosts charging more than this for inbound data.
+	// Hosts vary from about $1 to $20 per terabyte, and a 76 GB download at
+	// $16 cost over a dollar on the first live run. Zero means no ceiling.
+	MaxNetUSDPerTB float64
+
+	// OfferID pins one marketplace offer, for choosing a machine from the
+	// options table. Offers are short-lived, so a stale ID finds nothing and
+	// the run says so rather than renting something else.
+	OfferID string
+
 	// BlockRegions excludes hosts whose region contains any of these. The
 	// weights come from Hugging Face, which many hosts in some regions cannot
 	// reach, and a host that cannot download is billed until it is judged dead.
@@ -125,7 +151,8 @@ func DefaultPlan(card Card) Plan {
 	return Plan{
 		Card: card, Family: "qwen", Model: "iq3_s", Context: "64k",
 		Parallel: 2, KV: "int8", Version: "0.2.9",
-		MinCPUCores: 8, MinNetMbps: 400, MaxPriceHr: 0.60, BlockRegions: []string{"China"},
+		MinCPUCores: 8, MinNetMbps: 400, MaxPriceHr: 0.60, MaxNetUSDPerTB: 8,
+		BlockRegions: []string{"China"},
 	}
 }
 
@@ -166,6 +193,9 @@ func (p *Plan) Normalise() error {
 		} else {
 			p.MinRAMGB = 16
 		}
+	}
+	if p.DownloadGB == 0 {
+		p.DownloadGB = quantDownloadGB[p.Model]
 	}
 	// Disk: the download, the prepared pack of roughly the same size, and the
 	// draft layer. Strata writes all three to the volume.
@@ -249,4 +279,17 @@ func (p Plan) Sizing() core.SizingPlan {
 			"strata keeps experts that do not fit %d GB of VRAM in system RAM; host RAM and CPU change the result",
 			p.Card.VRAMGB)},
 	}
+}
+
+// benchHours is how long the measurement itself runs, by matrix. They are
+// estimates: the quick matrix is two short prompts and a decode run, the
+// full one adds 64K and 128K prefill, which is minutes each on a slow card.
+func (Plan) benchHours(m Matrix) float64 {
+	switch m {
+	case MatrixQuick:
+		return 0.15
+	case MatrixFull:
+		return 1.0
+	}
+	return 0.4
 }

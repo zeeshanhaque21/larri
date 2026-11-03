@@ -97,3 +97,35 @@ func TestVerificationTierIsReadFromTheFieldThatExists(t *testing.T) {
 		}
 	}
 }
+
+// A quoted rate leaves out the rented disk and the data moved, and a live run
+// was billed fifteen times its quote for it. The fields that say so must reach
+// the offer, and an offer that omits them must read as unreported, not free.
+func TestOfferCarriesTheChargesAQuoteLeavesOut(t *testing.T) {
+	const withBilling = `{"id":1,"dph_total":0.0830,"dph_base":0.0733,"gpu_ram":22528,"num_gpus":1,"gpu_name":"RTX 2080 Ti",
+		"storage_cost":0.8667,"internet_down_cost_per_tb":16.0,"internet_up_cost_per_tb":17.3,
+		"cpu_name":"Xeon Gold 6148 ","cpu_cores_effective":18.0}`
+	var w wireOffer
+	if err := json.Unmarshal([]byte(withBilling), &w); err != nil {
+		t.Fatal(err)
+	}
+	o, err := w.normalise()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.PriceBaseHr != 0.0733 || o.StorageUSDPerGBMonth != 0.8667 || o.NetDownUSDPerTB != 16.0 ||
+		o.NetUpUSDPerTB != 17.3 || o.CPUName != "Xeon Gold 6148" || o.CPUCoresEffective != 18 {
+		t.Errorf("offer = %+v", o)
+	}
+	var bare wireOffer
+	if err := json.Unmarshal([]byte(`{"id":2,"dph_total":0.1,"gpu_ram":24576,"num_gpus":1,"gpu_name":"X"}`), &bare); err != nil {
+		t.Fatal(err)
+	}
+	o, err = bare.normalise()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.NetDownUSDPerTB != 0 || o.StorageUSDPerGBMonth != 0 || o.PriceBaseHr != 0 {
+		t.Errorf("an absent charge should read as unreported (zero), got %+v", o)
+	}
+}
