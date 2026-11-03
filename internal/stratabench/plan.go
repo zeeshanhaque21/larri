@@ -94,6 +94,11 @@ type Plan struct {
 	// rented directly.
 	ImageRepo string
 
+	// ImageRef, when set, is the whole image reference and wins over
+	// ImageRepo and the version-flavor tag. For registries whose tag has a
+	// meaning of its own, such as ttl.sh where the tag is the lifetime.
+	ImageRef string
+
 	MinRAMGB    int
 	MinCPUCores int
 	MinNetMbps  float64
@@ -199,6 +204,9 @@ const DefaultImageRepo = "ghcr.io/zeeshanhaque21/strata-bench"
 
 // Image is the container image to rent the host with.
 func (p Plan) Image() string {
+	if p.ImageRef != "" {
+		return p.ImageRef
+	}
 	repo := p.ImageRepo
 	if repo == "" {
 		repo = DefaultImageRepo

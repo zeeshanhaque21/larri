@@ -62,7 +62,7 @@ type planFlags struct {
 	model, context      string
 	kv, version, flavor string
 	hfEndpoint          string
-	imageRepo           string
+	imageRepo, image    string
 	parallel, minRAM    int
 	minCores, disk      int
 	minNet, maxPrice    float64
@@ -78,6 +78,7 @@ func (pf *planFlags) register(f *flag.FlagSet) {
 	f.Var(&pf.blockRegions, "block-region", "exclude hosts in regions containing this text, repeatable (default: China)")
 	f.StringVar(&pf.hfEndpoint, "hf-endpoint", "", "download the model through a Hugging Face mirror, e.g. https://hf-mirror.com (lifts the China block)")
 	f.StringVar(&pf.imageRepo, "image-repo", os.Getenv("LARRI_BENCH_IMAGE_REPO"), "registry path of the Vast-compatible Strata image (default "+stratabench.DefaultImageRepo+")")
+	f.StringVar(&pf.image, "image", os.Getenv("LARRI_BENCH_IMAGE"), "full image reference, overriding --image-repo and the version tag")
 	f.IntVar(&pf.parallel, "parallel", 2, "requests Strata answers at once")
 	f.IntVar(&pf.minRAM, "min-ram", 0, "host RAM floor in GB (default: sized from the model)")
 	f.IntVar(&pf.minCores, "min-cores", 8, "host CPU core floor")
@@ -101,7 +102,7 @@ func (pf *planFlags) plans() ([]stratabench.Plan, error) {
 		p.Version, p.Flavor, p.Parallel = pf.version, pf.flavor, pf.parallel
 		p.MinRAMGB, p.MinCPUCores, p.DiskGB = pf.minRAM, pf.minCores, pf.disk
 		p.MinNetMbps, p.MaxPriceHr = pf.minNet, pf.maxPrice
-		p.HFEndpoint, p.ImageRepo = pf.hfEndpoint, pf.imageRepo
+		p.HFEndpoint, p.ImageRepo, p.ImageRef = pf.hfEndpoint, pf.imageRepo, pf.image
 		switch {
 		case len(pf.blockRegions) > 0:
 			p.BlockRegions = pf.blockRegions

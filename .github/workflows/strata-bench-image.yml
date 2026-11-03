@@ -35,4 +35,9 @@ jobs:
           context: docker/strata-bench
           push: true
           build-args: BASE=ghcr.io/niko1221/strata:${{ inputs.version || '0.2.9' }}-${{ matrix.flavor }}
-          tags: ghcr.io/${{ github.repository_owner }}/strata-bench:${{ inputs.version || '0.2.9' }}-${{ matrix.flavor }}
+          # ghcr.io needs its package set to public once, in the web UI, before
+          # Vast can pull it. ttl.sh needs no account and expires after a day,
+          # which is enough to run a benchmark without waiting on that step.
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/strata-bench:${{ inputs.version || '0.2.9' }}-${{ matrix.flavor }}
+            ttl.sh/${{ github.repository_owner }}-larri-strata-bench-${{ matrix.flavor }}:24h
