@@ -49,6 +49,20 @@ type Live struct {
 	cancel  context.CancelFunc
 }
 
+// Session returns the authenticated channel to the rented host, or nil once
+// the tunnel is closed.
+//
+// It exists for operators of a rig who need the host itself rather than its
+// endpoint: a benchmark reads GPU telemetry and engine facts from the machine
+// it measured. The channel is the one the supervisor already holds, so using it
+// opens nothing new and widens nothing.
+func (l *Live) Session() runtime.Session {
+	if l == nil || l.ssh == nil {
+		return nil
+	}
+	return l.ssh.Session()
+}
+
 // Close releases the tunnel and proxy. It does not destroy the instance —
 // that is Down's job, and conflating them would make a dropped connection look
 // like a teardown.

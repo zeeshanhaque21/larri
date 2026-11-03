@@ -1,0 +1,32 @@
+[
+  {
+    "id": "qwen/qwen3.8-flash",
+    "label": "Qwen3.8 Flash (hosted API)",
+    "in_per_m": 0.15,
+    "out_per_m": 0.47,
+    "cache_read_per_m": 0.016,
+    "as_of": "2026-11-03",
+    "source": "https://openrouter.ai/api/v1/models",
+    "note": "The hosted build, not the open-weight Flash-Next that Strata runs. Same family and size, different weights and quantisation."
+  },
+  {
+    "id": "deepseek/deepseek-v4.1-flash",
+    "label": "DeepSeek V4.1 Flash (hosted API)",
+    "in_per_m": 0.045,
+    "out_per_m": 0.50,
+    "cache_read_per_m": 0.012,
+    "as_of": "2026-11-03",
+    "source": "https://openrouter.ai/api/v1/models",
+    "note": "A different model. Included because it is the cheapest comparable hosted flash tier."
+  },
+  {
+    "id": "qwen/qwen3.8-27b",
+    "label": "Qwen3.8 27B (hosted API)",
+    "in_per_m": 0.15,
+    "out_per_m": 1.875,
+    "cache_read_per_m": 0.0375,
+    "as_of": "2026-11-03",
+    "source": "https://openrouter.ai/api/v1/models",
+    "note": "A dense 27B model, not a mixture of experts."
+  }
+]
