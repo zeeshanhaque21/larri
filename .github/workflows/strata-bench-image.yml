@@ -3,6 +3,9 @@ name: strata-bench-image
 # Builds the Vast-compatible Strata image the bench rents. Run it by hand when
 # a new Strata release should be benchmarked.
 on:
+  push:
+    branches: [feat/strata-bench]
+    paths: [docker/strata-bench/**, .github/workflows/strata-bench-image.yml]
   workflow_dispatch:
     inputs:
       version:
@@ -31,5 +34,5 @@ jobs:
         with:
           context: docker/strata-bench
           push: true
-          build-args: BASE=ghcr.io/niko1221/strata:${{ inputs.version }}-${{ matrix.flavor }}
-          tags: ghcr.io/${{ github.repository_owner }}/strata-bench:${{ inputs.version }}-${{ matrix.flavor }}
+          build-args: BASE=ghcr.io/niko1221/strata:${{ inputs.version || '0.2.9' }}-${{ matrix.flavor }}
+          tags: ghcr.io/${{ github.repository_owner }}/strata-bench:${{ inputs.version || '0.2.9' }}-${{ matrix.flavor }}
