@@ -186,6 +186,9 @@ func (e *Engine) launchScript() string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString(imageEnv + "\n")
+	if p.HFEndpoint != "" {
+		b.WriteString("export HF_ENDPOINT=" + runtime.ShellQuote(p.HFEndpoint) + "\n")
+	}
 	// The image links its pinned llama.cpp checkout into the install folder so
 	// a first start fetches nothing from GitHub; the entrypoint does this and
 	// the launch needs it done.

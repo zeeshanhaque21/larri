@@ -117,7 +117,7 @@ func APICostPerRequest(w Workload, p APIPrice) float64 {
 // busy one; the break-even request rate is the number that expresses it.
 func Compare(r Rates, w Workload, api APIPrice, sessionHours float64) (Comparison, error) {
 	c := Comparison{Workload: w, API: api, Card: r.Card}
-	fresh := int(float64(w.InputTokens) * (1 - w.CachedFrac))
+	fresh := int(math.Round(float64(w.InputTokens) * (1 - w.CachedFrac)))
 	pp, ok := r.ppFor(maxInt(fresh, 1))
 	if !ok {
 		return c, fmt.Errorf("stratabench: compare: %s has no prefill measurement", r.Card)

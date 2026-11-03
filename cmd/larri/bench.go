@@ -61,6 +61,7 @@ type planFlags struct {
 	cards, blockRegions stringList
 	model, context      string
 	kv, version, flavor string
+	hfEndpoint          string
 	parallel, minRAM    int
 	minCores, disk      int
 	minNet, maxPrice    float64
@@ -74,6 +75,7 @@ func (pf *planFlags) register(f *flag.FlagSet) {
 	f.StringVar(&pf.version, "strata-version", "0.2.9", "Strata release, which names the image tag")
 	f.StringVar(&pf.flavor, "flavor", "", "image flavor, cuda12 or cuda13 (default: the card's own)")
 	f.Var(&pf.blockRegions, "block-region", "exclude hosts in regions containing this text, repeatable (default: China)")
+	f.StringVar(&pf.hfEndpoint, "hf-endpoint", "", "download the model through a Hugging Face mirror, e.g. https://hf-mirror.com (lifts the China block)")
 	f.IntVar(&pf.parallel, "parallel", 2, "requests Strata answers at once")
 	f.IntVar(&pf.minRAM, "min-ram", 0, "host RAM floor in GB (default: sized from the model)")
 	f.IntVar(&pf.minCores, "min-cores", 8, "host CPU core floor")
@@ -97,8 +99,12 @@ func (pf *planFlags) plans() ([]stratabench.Plan, error) {
 		p.Version, p.Flavor, p.Parallel = pf.version, pf.flavor, pf.parallel
 		p.MinRAMGB, p.MinCPUCores, p.DiskGB = pf.minRAM, pf.minCores, pf.disk
 		p.MinNetMbps, p.MaxPriceHr = pf.minNet, pf.maxPrice
-		if len(pf.blockRegions) > 0 {
+		p.HFEndpoint = pf.hfEndpoint
+		switch {
+		case len(pf.blockRegions) > 0:
 			p.BlockRegions = pf.blockRegions
+		case pf.hfEndpoint != "":
+			p.BlockRegions = nil
 		}
 		if err := p.Normalise(); err != nil {
 			return nil, err
@@ -139,6 +145,9 @@ func benchOffers(ctx context.Context, args []string) error {
 	defer closeFn()
 	for _, p := range plans {
 		fmt.Printf("\n%s  %s %s, %s context, image %s\n", p.Card.Key, p.Family, p.Model, p.Context, p.Image())
+		if p.HFEndpoint != "" {
+			fmt.Printf("  model download through mirror %s\n", p.HFEndpoint)
+		}
 		fmt.Printf("  filter: 1x %s >=%dGB VRAM, >=%d cores, >=%dGB RAM, >=%.0f Mbps, <=$%.2f/hr, disk %dGB\n",
 			p.Card.VastName, p.Card.VRAMGB-2, p.MinCPUCores, p.MinRAMGB, p.MinNetMbps, p.MaxPriceHr, p.DiskGB)
 		sv, err := r.Preview(ctx, p)

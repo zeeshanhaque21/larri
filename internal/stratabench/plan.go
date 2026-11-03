@@ -15,6 +15,7 @@ package stratabench
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -97,6 +98,14 @@ type Plan struct {
 	// weights come from Hugging Face, which many hosts in some regions cannot
 	// reach, and a host that cannot download is billed until it is judged dead.
 	BlockRegions []string
+
+	// HFEndpoint points the model download at a Hugging Face mirror, such as
+	// https://hf-mirror.com. Strata honours it for model files and checks the
+	// pinned hashes of what it fetches. It is opt-in: weights then arrive from
+	// a third party, which is the caller's decision and not this package's.
+	// Setting it lifts the default region block, which existed only because
+	// of the reachability problem a mirror solves.
+	HFEndpoint string
 }
 
 // DefaultPlan is the configuration the community benchmarks in Strata's own
@@ -127,6 +136,13 @@ func (p *Plan) Normalise() error {
 	}
 	if p.Version == "" {
 		return fmt.Errorf("stratabench: version: not set")
+	}
+	if p.HFEndpoint != "" {
+		u, err := url.Parse(p.HFEndpoint)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("stratabench: hf endpoint: %q is not an https URL", p.HFEndpoint)
+		}
+		p.HFEndpoint = strings.TrimRight(p.HFEndpoint, "/")
 	}
 	if p.Parallel < 1 || p.Parallel > 8 {
 		return fmt.Errorf("stratabench: parallel: %d outside 1..8", p.Parallel)

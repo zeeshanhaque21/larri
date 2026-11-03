@@ -17,3 +17,6 @@ gh-pages/content.html
 
 # Python bootstrap test cache.
 __pycache__/
+
+# local benchmark run artifacts
+bench-results/
