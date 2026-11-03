@@ -782,3 +782,20 @@ func TestTheOldSamplerFormHangsTheChannel(t *testing.T) {
 		t.Errorf("the old form returned in %v; the regression test would not catch it", d)
 	}
 }
+
+func TestReadinessWaitOutlastsAStrataColdStart(t *testing.T) {
+	// The orchestrator's default readiness cap is 30 minutes. Strata needed
+	// 35 to 45 on a 768 Mbps host, and the first live run was torn down at the
+	// cap while the engine was still preparing normally.
+	r := &Runner{OpenProvider: func() (provider.Provider, error) { return fixedProvider{}, nil }}
+	o, _, err := r.orchestrator(plan(t, "v100"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.ReadyCap < 90*time.Minute {
+		t.Errorf("ready cap = %v, want at least 90m", o.ReadyCap)
+	}
+	if o.ReadyCap >= o.Deadline {
+		t.Errorf("ready cap %v must sit inside the overall deadline %v", o.ReadyCap, o.Deadline)
+	}
+}

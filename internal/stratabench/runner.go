@@ -130,11 +130,15 @@ func (r *Runner) orchestrator(p Plan, events chan<- daemon.Event) (*daemon.Orche
 	eng := &Engine{Plan: p}
 	return &daemon.Orchestrator{
 		Store: r.Store, Provider: prov, Runtime: eng, Policy: policy, Events: events,
-		// Strata downloads tens of gigabytes and then prepares them, which
-		// is CPU work on whatever host this is. The ceilings are generous
-		// because a stalled boot is detected by silence, not by the clock.
-		Deadline: 120 * time.Minute, BootCap: 90 * time.Minute, MaxHostAttempts: 2,
-		IdleTimeout: 45 * time.Minute,
+		// Strata downloads tens of gigabytes, checks them, prepares a pack
+		// and fetches a draft layer before it serves, which took 35 to 45
+		// minutes on a 768 Mbps host. ReadyCap bounds the wait for the first
+		// completion and defaults to 30 minutes: the first live run ended
+		// at exactly that cap with Strata still working normally. A genuine
+		// stall is caught separately, by silence in the log, so the cap can
+		// be generous without leaving a dead host billing.
+		Deadline: 150 * time.Minute, BootCap: 90 * time.Minute, ReadyCap: 120 * time.Minute,
+		MaxHostAttempts: 2, IdleTimeout: 45 * time.Minute,
 	}, eng, nil
 }
 
